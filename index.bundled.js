@@ -273,7 +273,7 @@ var require_account_service = __commonJS({
 `, "utf8");
       api2?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
       return readState({
-        notice: `Switched to ${name}. Relaunching Codex to apply it.`,
+        notice: `Switched to ${name}. Relaunching Codex.`,
         requiresAppRelaunch: true
       });
     }
@@ -304,7 +304,7 @@ var require_account_service = __commonJS({
       await fsp.rm(CURRENT_NAME_PATH, { force: true });
       api2?.log?.info?.("[account-switcher] cleared active auth file; app relaunch required");
       return readState({
-        notice: "Cleared active auth. Relaunching Codex to show the login screen.",
+        notice: "Session cleared. Relaunching Codex for sign-in.",
         requiresAppRelaunch: true
       });
     }
@@ -625,7 +625,7 @@ var require_ui_settings = __commonJS({
     } = require_ui_components();
     async function renderAccountsPage(state, root) {
       root.textContent = "";
-      root.appendChild(settingsStatus("Loading accounts..."));
+      root.appendChild(settingsStatus("Loading saved accounts..."));
       try {
         const accountState = await invoke(state, "state");
         renderAccountsPageState(state, root, accountState);
@@ -636,33 +636,33 @@ var require_ui_settings = __commonJS({
     }
     function renderAccountsPageState(state, root, accountState) {
       root.textContent = "";
-      const intro = settingsSection("Account profiles");
+      const intro = settingsSection("Active session");
       const introCard = settingsCard();
-      const currentName = accountState.current || (accountState.hasActiveAuth ? "Unsaved active account" : "No active account");
+      const currentName = accountState.current || (accountState.hasActiveAuth ? "Unsaved account" : "No active session");
       const currentValue = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : currentName;
       introCard.appendChild(
         settingsInfoRow(
-          "Current account",
+          "Signed in as",
           currentValue,
-          accountState.hasActiveAuth ? "The active session is stored in ~/.codex/auth.json." : "Codex does not currently have an auth.json file."
+          accountState.hasActiveAuth ? "Codex is using the session stored in ~/.codex/auth.json." : "No active auth file exists at ~/.codex/auth.json."
         )
       );
       intro.appendChild(introCard);
       root.appendChild(intro);
-      const actions = settingsSection("Actions");
+      const actions = settingsSection("Account setup");
       const actionCard = settingsCard();
       actionCard.appendChild(
         settingsActionRow(
-          "Add another account",
-          "Back up and clear active auth, then reload Codex to show the login screen.",
-          "Prepare",
+          "Sign in to another account",
+          "Back up the current session, clear auth, and relaunch Codex for sign-in.",
+          "Start sign-in",
           () => clearActiveFromSettings(state, root)
         )
       );
       actionCard.appendChild(
         settingsActionRow(
-          "Refresh profiles",
-          "Reload saved accounts from ~/.codex/auth_accounts.",
+          "Refresh saved accounts",
+          "Rescan saved sessions in ~/.codex/auth_accounts.",
           "Refresh",
           () => renderAccountsPage(state, root)
         )
@@ -674,7 +674,7 @@ var require_ui_settings = __commonJS({
       const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
       if (!accounts.length) {
         savedCard.appendChild(
-          settingsInfoRow("No saved accounts", "Sign in and refresh to autosave the active account.", "")
+          settingsInfoRow("No saved accounts yet", "None found", "Use Sign in to another account to create one.")
         );
       } else {
         for (const name of accounts) {
@@ -698,7 +698,7 @@ var require_ui_settings = __commonJS({
       left.appendChild(title);
       const desc = document.createElement("div");
       desc.className = "text-token-text-secondary min-w-0 text-sm";
-      desc.textContent = accountState.current === name ? "This profile matches the active auth file." : "Saved account profile.";
+      desc.textContent = accountState.current === name ? "Active in this Codex window." : "Ready to switch.";
       left.appendChild(desc);
       row.appendChild(left);
       const actionsEl = document.createElement("div");
@@ -719,7 +719,7 @@ var require_ui_settings = __commonJS({
       return row;
     }
     function clearActiveFromSettings(state, root) {
-      runSettingsAction(state, root, "clear-active", {}, "Preparing new login...");
+      runSettingsAction(state, root, "clear-active", {}, "Preparing sign-in...");
     }
     async function runSettingsAction(state, root, action, payload, loadingText) {
       root.textContent = "";
@@ -742,10 +742,10 @@ var require_ui_settings = __commonJS({
     }
     function authReloadMessage(action, accountState) {
       if (action === "clear-active") {
-        return "Auth cleared. Relaunching Codex to show the login screen...";
+        return "Session cleared. Relaunching Codex for sign-in...";
       }
       const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : "selected account";
-      return `Switched to ${email}. Relaunching Codex to apply it...`;
+      return `Switched to ${email}. Relaunching Codex...`;
     }
     function scheduleAppRelaunch(state, root) {
       window.setTimeout(() => {
@@ -783,7 +783,7 @@ var require_ui_popup = __commonJS({
       const header = document.createElement("div");
       header.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;";
       const title = document.createElement("div");
-      title.textContent = "Codex accounts";
+      title.textContent = "Accounts";
       title.style.cssText = "font-size:13px;font-weight:500;color:var(--color-token-text-primary,currentColor);";
       header.appendChild(title);
       panel.appendChild(header);
@@ -795,7 +795,7 @@ var require_ui_popup = __commonJS({
       list.style.cssText = "display:flex;flex-direction:column;gap:4px;";
       if (accounts.length === 0) {
         const empty = document.createElement("div");
-        empty.textContent = accountState.hasActiveAuth ? "No saved accounts yet." : "No active account. Restart Codex and log in.";
+        empty.textContent = accountState.hasActiveAuth ? "No saved accounts yet." : "No active session. Relaunch and sign in.";
         empty.style.cssText = "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0 4px;";
         list.appendChild(empty);
       }
@@ -805,8 +805,8 @@ var require_ui_popup = __commonJS({
       panel.appendChild(list);
       const actions = document.createElement("div");
       actions.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;";
-      const add = smallButton("Add another");
-      add.title = "Back up and clear active auth, then reload Codex to show the login screen.";
+      const add = smallButton("New sign-in");
+      add.title = "Back up the current session, clear auth, and relaunch Codex for sign-in.";
       bindButtonAction(add, () => {
         void clearActiveForNewLogin(state, panel);
       });
@@ -828,7 +828,7 @@ var require_ui_popup = __commonJS({
       const wrap = document.createElement("label");
       wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:8px;";
       const label = document.createElement("span");
-      label.textContent = "Switch account";
+      label.textContent = "Switch to";
       label.style.cssText = "font-size:11px;color:var(--color-token-text-secondary,currentColor);";
       wrap.appendChild(label);
       const select = document.createElement("select");
@@ -850,7 +850,7 @@ var require_ui_popup = __commonJS({
       if (!current) {
         const option = document.createElement("option");
         option.value = "";
-        option.textContent = "Unsaved active account";
+        option.textContent = "Unsaved account";
         select.appendChild(option);
       }
       for (const name of accounts) {
@@ -866,7 +866,7 @@ var require_ui_popup = __commonJS({
         event.stopPropagation();
         const name = select.value;
         if (!name || name === accountState.current) return;
-        void runPanelAction(state, panel, "switch", { name }, "Switching...");
+        void runPanelAction(state, panel, "switch", { name }, "Switching account...");
       });
       wrap.appendChild(select);
       return wrap;
@@ -882,7 +882,7 @@ var require_ui_popup = __commonJS({
       protectInteractiveControl(label);
       bindButtonAction(label, () => {
         if (accountState.current === name) return;
-        void runPanelAction(state, panel, "switch", { name }, "Switching...");
+        void runPanelAction(state, panel, "switch", { name }, "Switching account...");
       });
       row.appendChild(label);
       const remove = iconButton(`Remove ${name}`, "x");
@@ -893,7 +893,7 @@ var require_ui_popup = __commonJS({
       return row;
     }
     function clearActiveForNewLogin(state, panel) {
-      runPanelAction(state, panel, "clear-active", {}, "Clearing active auth...");
+      runPanelAction(state, panel, "clear-active", {}, "Preparing sign-in...");
     }
     async function runPanelAction(state, panel, action, payload, loadingText) {
       setPanelStatus(panel, loadingText);
@@ -917,10 +917,10 @@ var require_ui_popup = __commonJS({
     }
     function authReloadMessage(action, accountState) {
       if (action === "clear-active") {
-        return "Auth cleared. Relaunching Codex to show the login screen...";
+        return "Session cleared. Relaunching Codex for sign-in...";
       }
       const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : "selected account";
-      return `Switched to ${email}. Relaunching Codex to apply it...`;
+      return `Switched to ${email}. Relaunching Codex...`;
     }
     function scheduleAppRelaunch(state, panel) {
       window.setTimeout(() => {
@@ -930,7 +930,7 @@ var require_ui_popup = __commonJS({
       }, 1200);
     }
     async function refreshPanel(state, panel) {
-      setPanelStatus(panel, "Loading accounts...");
+      setPanelStatus(panel, "Loading saved accounts...");
       try {
         const accountState = await invoke(state, "state");
         renderAccountPanel(state, panel, accountState);
@@ -953,7 +953,7 @@ var require_renderer = __commonJS({
         const pageHandle = state.api.settings.registerPage({
           id: "accounts",
           title: "Accounts",
-          description: "Save and switch Codex auth profiles.",
+          description: "Switch Codex accounts and manage saved sessions.",
           iconSvg: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-sm inline-block align-middle" aria-hidden="true"><path d="M10 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M4.75 16.25c.7-2.15 2.65-3.5 5.25-3.5s4.55 1.35 5.25 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
           render: (root) => {
             state.settingsRoot = root;

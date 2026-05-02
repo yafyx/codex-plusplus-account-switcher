@@ -202,7 +202,7 @@ async function switchAccount(rawName, api) {
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
   api?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
   return readState({
-    notice: `Switched to ${name}. Relaunching Codex to apply it.`,
+    notice: `Switched to ${name}. Relaunching Codex.`,
     requiresAppRelaunch: true,
   });
 }
@@ -240,7 +240,7 @@ async function clearActiveAuth(api) {
   await fsp.rm(CURRENT_NAME_PATH, { force: true });
   api?.log?.info?.("[account-switcher] cleared active auth file; app relaunch required");
   return readState({
-    notice: "Cleared active auth. Relaunching Codex to show the login screen.",
+    notice: "Session cleared. Relaunching Codex for sign-in.",
     requiresAppRelaunch: true,
   });
 }

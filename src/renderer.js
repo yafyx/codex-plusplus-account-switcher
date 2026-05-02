@@ -16,7 +16,7 @@ function startRenderer(state) {
     const pageHandle = state.api.settings.registerPage({
       id: "accounts",
       title: "Accounts",
-      description: "Save and switch Codex auth profiles.",
+      description: "Switch Codex accounts and manage saved sessions.",
       iconSvg:
         '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-sm inline-block align-middle" aria-hidden="true">' +
         '<path d="M10 10.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" stroke="currentColor" stroke-width="1.5"/>' +

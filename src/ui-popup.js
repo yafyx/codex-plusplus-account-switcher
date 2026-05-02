@@ -23,7 +23,7 @@ function renderAccountPanel(state, panel, accountState) {
     "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;";
 
   const title = document.createElement("div");
-  title.textContent = "Codex accounts";
+  title.textContent = "Accounts";
   title.style.cssText =
     "font-size:13px;font-weight:500;color:var(--color-token-text-primary,currentColor);";
   header.appendChild(title);
@@ -43,7 +43,7 @@ function renderAccountPanel(state, panel, accountState) {
     const empty = document.createElement("div");
     empty.textContent = accountState.hasActiveAuth
       ? "No saved accounts yet."
-      : "No active account. Restart Codex and log in.";
+      : "No active session. Relaunch and sign in.";
     empty.style.cssText =
       "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0 4px;";
     list.appendChild(empty);
@@ -54,13 +54,13 @@ function renderAccountPanel(state, panel, accountState) {
   }
   panel.appendChild(list);
 
-  // Footer: "Add another" + refresh
+  // Footer: new sign-in + refresh
   const actions = document.createElement("div");
   actions.style.cssText =
     "display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;";
 
-  const add = smallButton("Add another");
-  add.title = "Back up and clear active auth, then reload Codex to show the login screen.";
+  const add = smallButton("New sign-in");
+  add.title = "Back up the current session, clear auth, and relaunch Codex for sign-in.";
   bindButtonAction(add, () => {
     void clearActiveForNewLogin(state, panel);
   });
@@ -94,7 +94,7 @@ function accountSelectControl(state, panel, accountState, accounts) {
   wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:8px;";
 
   const label = document.createElement("span");
-  label.textContent = "Switch account";
+  label.textContent = "Switch to";
   label.style.cssText = "font-size:11px;color:var(--color-token-text-secondary,currentColor);";
   wrap.appendChild(label);
 
@@ -118,7 +118,7 @@ function accountSelectControl(state, panel, accountState, accounts) {
   if (!current) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "Unsaved active account";
+    option.textContent = "Unsaved account";
     select.appendChild(option);
   }
 
@@ -135,7 +135,7 @@ function accountSelectControl(state, panel, accountState, accounts) {
     event.stopPropagation();
     const name = select.value;
     if (!name || name === accountState.current) return;
-    void runPanelAction(state, panel, "switch", { name }, "Switching...");
+    void runPanelAction(state, panel, "switch", { name }, "Switching account...");
   });
 
   wrap.appendChild(select);
@@ -165,7 +165,7 @@ function accountRow(state, panel, accountState, name) {
   protectInteractiveControl(label);
   bindButtonAction(label, () => {
     if (accountState.current === name) return;
-    void runPanelAction(state, panel, "switch", { name }, "Switching...");
+    void runPanelAction(state, panel, "switch", { name }, "Switching account...");
   });
   row.appendChild(label);
 
@@ -180,7 +180,7 @@ function accountRow(state, panel, accountState, name) {
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
 function clearActiveForNewLogin(state, panel) {
-  runPanelAction(state, panel, "clear-active", {}, "Clearing active auth...");
+  runPanelAction(state, panel, "clear-active", {}, "Preparing sign-in...");
 }
 
 async function runPanelAction(state, panel, action, payload, loadingText) {
@@ -206,12 +206,12 @@ async function runPanelAction(state, panel, action, payload, loadingText) {
 
 function authReloadMessage(action, accountState) {
   if (action === "clear-active") {
-    return "Auth cleared. Relaunching Codex to show the login screen...";
+    return "Session cleared. Relaunching Codex for sign-in...";
   }
   const email = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
     : "selected account";
-  return `Switched to ${email}. Relaunching Codex to apply it...`;
+  return `Switched to ${email}. Relaunching Codex...`;
 }
 
 function scheduleAppRelaunch(state, panel) {
@@ -223,7 +223,7 @@ function scheduleAppRelaunch(state, panel) {
 }
 
 async function refreshPanel(state, panel) {
-  setPanelStatus(panel, "Loading accounts...");
+  setPanelStatus(panel, "Loading saved accounts...");
   try {
     const accountState = await invoke(state, "state");
     renderAccountPanel(state, panel, accountState);

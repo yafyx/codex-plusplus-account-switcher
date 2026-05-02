@@ -16,7 +16,7 @@ const {
 
 async function renderAccountsPage(state, root) {
   root.textContent = "";
-  root.appendChild(settingsStatus("Loading accounts..."));
+  root.appendChild(settingsStatus("Loading saved accounts..."));
   try {
     const accountState = await invoke(state, "state");
     renderAccountsPageState(state, root, accountState);
@@ -30,41 +30,41 @@ function renderAccountsPageState(state, root, accountState) {
   root.textContent = "";
 
   // ── Current account info ─────────────────────────────────────────────────
-  const intro = settingsSection("Account profiles");
+  const intro = settingsSection("Active session");
   const introCard = settingsCard();
   const currentName =
     accountState.current ||
-    (accountState.hasActiveAuth ? "Unsaved active account" : "No active account");
+    (accountState.hasActiveAuth ? "Unsaved account" : "No active session");
   const currentValue = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
     : currentName;
   introCard.appendChild(
     settingsInfoRow(
-      "Current account",
+      "Signed in as",
       currentValue,
       accountState.hasActiveAuth
-        ? "The active session is stored in ~/.codex/auth.json."
-        : "Codex does not currently have an auth.json file.",
+        ? "Codex is using the session stored in ~/.codex/auth.json."
+        : "No active auth file exists at ~/.codex/auth.json.",
     ),
   );
   intro.appendChild(introCard);
   root.appendChild(intro);
 
   // ── Actions ──────────────────────────────────────────────────────────────
-  const actions = settingsSection("Actions");
+  const actions = settingsSection("Account setup");
   const actionCard = settingsCard();
   actionCard.appendChild(
     settingsActionRow(
-      "Add another account",
-      "Back up and clear active auth, then reload Codex to show the login screen.",
-      "Prepare",
+      "Sign in to another account",
+      "Back up the current session, clear auth, and relaunch Codex for sign-in.",
+      "Start sign-in",
       () => clearActiveFromSettings(state, root),
     ),
   );
   actionCard.appendChild(
     settingsActionRow(
-      "Refresh profiles",
-      "Reload saved accounts from ~/.codex/auth_accounts.",
+      "Refresh saved accounts",
+      "Rescan saved sessions in ~/.codex/auth_accounts.",
       "Refresh",
       () => renderAccountsPage(state, root),
     ),
@@ -78,7 +78,11 @@ function renderAccountsPageState(state, root, accountState) {
   const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
   if (!accounts.length) {
     savedCard.appendChild(
-      settingsInfoRow("No saved accounts", "Sign in and refresh to autosave the active account.", ""),
+      settingsInfoRow(
+        "No saved accounts yet",
+        "None found",
+        "Use Sign in to another account to create one.",
+      ),
     );
   } else {
     for (const name of accounts) {
@@ -110,8 +114,8 @@ function settingsAccountRow(state, root, accountState, name) {
   desc.className = "text-token-text-secondary min-w-0 text-sm";
   desc.textContent =
     accountState.current === name
-      ? "This profile matches the active auth file."
-      : "Saved account profile.";
+      ? "Active in this Codex window."
+      : "Ready to switch.";
   left.appendChild(desc);
   row.appendChild(left);
 
@@ -137,7 +141,7 @@ function settingsAccountRow(state, root, accountState, name) {
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
 function clearActiveFromSettings(state, root) {
-  runSettingsAction(state, root, "clear-active", {}, "Preparing new login...");
+  runSettingsAction(state, root, "clear-active", {}, "Preparing sign-in...");
 }
 
 async function runSettingsAction(state, root, action, payload, loadingText) {
@@ -162,12 +166,12 @@ async function runSettingsAction(state, root, action, payload, loadingText) {
 
 function authReloadMessage(action, accountState) {
   if (action === "clear-active") {
-    return "Auth cleared. Relaunching Codex to show the login screen...";
+    return "Session cleared. Relaunching Codex for sign-in...";
   }
   const email = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
     : "selected account";
-  return `Switched to ${email}. Relaunching Codex to apply it...`;
+  return `Switched to ${email}. Relaunching Codex...`;
 }
 
 function scheduleAppRelaunch(state, root) {

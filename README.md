@@ -1,28 +1,58 @@
-# Account Switcher
+# Codex Account Switcher
 
-Codex++ tweak that adds an Accounts page to the Codex++ settings sidebar and quick account controls to Codex's account/settings popup.
+Codex++ tweak for saving, switching, and managing Codex desktop auth sessions.
 
-It follows the same storage model as `codex-auth`:
+## Features
+
+- Automatically saves the active Codex auth session when it does not match a saved account.
+- Shows saved accounts by email when an email is available in the auth token.
+- Adds a compact collapsible Accounts section to Codex's account popup, anchored above Rate limits remaining.
+- Switches accounts directly from the account popup. Switching replaces the active auth file and relaunches Codex.
+- Shows cached 5-hour and weekly rate-limit remaining values for accounts that have been active.
+- Adds a dedicated Accounts settings page for setup, refresh, switching, deletion, and new sign-in flows.
+- Starts a new sign-in by backing up and clearing the active auth file, then relaunching Codex.
+
+## Storage
+
+The tweak follows the same storage model as `codex-auth`:
 
 - active auth: `~/.codex/auth.json`
 - saved accounts: `~/.codex/auth_accounts/<name>.json`
 - current account marker: `~/.codex/current_account`
+- cached rate-limit usage: `~/.codex/auth_accounts_usage.json`
 
-## Features
+New sign-in backups are written as `~/.codex/auth.account-switcher-backup-<timestamp>.json`.
 
-- Automatically save the active auth file as `account`, `account-2`, etc. when it does not match any saved profile.
-- Display saved accounts as email addresses when the email is available in the auth token.
-- Add another account by backing up and clearing the active auth file so Codex can sign in again.
-- Switch between saved accounts from the account/settings popup.
-- Use the account selector in the sidebar settings popup for quick switching.
-- Switch between saved accounts from the dedicated Accounts settings page.
-- Remove saved account snapshots.
-- Clear the active auth file so Codex can log in with another account, then reload to show the login screen.
-
-Switching replaces `~/.codex/auth.json` and reloads Codex so the running window applies the selected account.
-
-## Verification
+## Install
 
 ```sh
-node --check index.js
+~/Library/Application Support/codex-plusplus/tweaks/codex-plusplus-account-switcher
 ```
+
+Drop this folder into:
+
+```sh
+~/Library/Application Support/codex-plusplus/tweaks/
+```
+
+Then reload tweaks from Codex++ or restart Codex.
+
+## Usage
+
+- Open Codex's account menu.
+- Expand Accounts to see saved sessions and their cached rate-limit status.
+- Click a saved account to switch to it.
+- Click Configure accounts to open the Accounts settings page.
+- Use the Accounts settings page to refresh, remove saved snapshots, or start a new sign-in.
+
+## Test
+
+```sh
+node --test test/account-service.test.js
+node --check index.js
+node --check index.bundled.js
+```
+
+## Manifest
+
+Tweak id: `me.erkin.codex-plusplus-account-switcher`

@@ -13,6 +13,7 @@ It follows the same storage model as `codex-auth`:
 - Save the currently signed-in Codex account under a name.
 - Add another account by backing up and clearing the active auth file so Codex can sign in again.
 - Switch between saved accounts from the account/settings popup.
+- Use the account selector in the sidebar settings popup for quick switching.
 - Switch between saved accounts from the dedicated Accounts settings page.
 - Remove saved account snapshots.
 - Clear the active auth file so Codex can log in with another account, then save that new login as a named account.

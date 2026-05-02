@@ -534,9 +534,13 @@ function renderAccountPanel(state, panel, accountState) {
   header.appendChild(save);
   panel.appendChild(header);
 
+  const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
+  if (accounts.length > 0) {
+    panel.appendChild(accountSelectControl(state, panel, accountState, accounts));
+  }
+
   const list = document.createElement("div");
   list.style.cssText = "display:flex;flex-direction:column;gap:4px;";
-  const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
 
   if (accounts.length === 0) {
     const empty = document.createElement("div");
@@ -582,6 +586,61 @@ function renderAccountPanel(state, panel, accountState) {
       ";";
     panel.appendChild(note);
   }
+}
+
+function accountSelectControl(state, panel, accountState, accounts) {
+  const wrap = document.createElement("label");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:8px;";
+
+  const label = document.createElement("span");
+  label.textContent = "Switch account";
+  label.style.cssText = "font-size:11px;color:var(--color-token-text-secondary,currentColor);";
+  wrap.appendChild(label);
+
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "Switch Codex account");
+  select.style.cssText = [
+    "box-sizing:border-box",
+    "width:100%",
+    "height:30px",
+    "border:1px solid color-mix(in srgb,currentColor 16%,transparent)",
+    "border-radius:6px",
+    "padding:0 8px",
+    "background:var(--color-background-panel,var(--color-token-bg-primary,transparent))",
+    "color:var(--color-token-text-primary,currentColor)",
+    "font:inherit",
+    "font-size:12px",
+    "cursor:pointer",
+  ].join(";");
+
+  const current = accountState.current || "";
+  if (!current) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Unsaved active account";
+    select.appendChild(option);
+  }
+
+  for (const name of accounts) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = accountState.current === name ? `${name} (current)` : name;
+    select.appendChild(option);
+  }
+  select.value = current;
+  select.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  select.addEventListener("change", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const name = select.value;
+    if (!name || name === accountState.current) return;
+    void runPanelAction(state, panel, "switch", { name }, "Switching...");
+  });
+
+  wrap.appendChild(select);
+  return wrap;
 }
 
 function accountRow(state, panel, accountState, name) {

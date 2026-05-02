@@ -172,8 +172,19 @@ async function deleteAccount(rawName) {
   const { CURRENT_NAME_PATH } = codexAuthPaths();
   const name = normalizeAccountName(rawName);
   await fsp.rm(accountPath(name), { force: true });
-  const current = await getCurrentAccountName([]);
-  if (current === name) await fsp.rm(CURRENT_NAME_PATH, { force: true });
+
+  // Read CURRENT_NAME_PATH directly; calling getCurrentAccountName([]) would
+  // always return null because the empty accounts list never matches anything.
+  try {
+    const raw = await fsp.readFile(CURRENT_NAME_PATH, "utf8");
+    if (raw.trim() === name) {
+      await fsp.rm(CURRENT_NAME_PATH, { force: true });
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    // File doesn't exist — nothing to clear.
+  }
+
   return readState({ notice: `Removed saved account ${name}.` });
 }
 

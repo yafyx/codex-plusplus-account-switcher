@@ -3,7 +3,11 @@ function compactText(element) {
   return (element?.textContent || "").replace(/\s+/g, " ").trim();
 }
 
-/** Returns true if the element is visible in the viewport. */
+/**
+ * Returns true if the element is rendered and not hidden — i.e., it has
+ * non-zero layout dimensions and is not `display:none` or `visibility:hidden`.
+ * Note: this does NOT check whether the element intersects the visible viewport.
+ */
 function isVisible(element) {
   if (!(element instanceof HTMLElement)) return false;
   const rect = element.getBoundingClientRect();

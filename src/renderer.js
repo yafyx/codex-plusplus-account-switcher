@@ -45,6 +45,8 @@ function startRenderer(state) {
 
   state.observer = new MutationObserver(schedule);
   state.observer.observe(document.documentElement, { childList: true, subtree: true });
+  // Disconnect the observer when the tweak is stopped to avoid a memory leak.
+  state.disposers.push(() => state.observer?.disconnect());
   document.addEventListener("pointerdown", schedule, true);
   document.addEventListener("keydown", schedule, true);
   state.disposers.push(() => document.removeEventListener("pointerdown", schedule, true));
@@ -88,7 +90,10 @@ function installAccountSwitcher(state, menu) {
 
   const panel = accountPanelShell(target);
   target.before(panel);
-  void refreshPanel(state, panel);
+  // Attach an explicit catch so the promise rejection is never silently swallowed.
+  refreshPanel(state, panel).catch((error) => {
+    state.api.log.warn("[account-switcher] panel load failed", String(error));
+  });
 }
 
 module.exports = { startRenderer };

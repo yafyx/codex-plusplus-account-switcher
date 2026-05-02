@@ -150,7 +150,7 @@ function accountPanelShell(base) {
     "cursor:default",
     "user-select:none",
   ].join(";");
-  if (base?.className) panel.className = "";
+  if (base?.className) panel.className = base.className;
   return panel;
 }
 

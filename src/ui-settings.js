@@ -141,8 +141,13 @@ function settingsAccountRow(state, root, accountState, name) {
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
 async function saveCurrentFromSettings(state, root) {
-  const name = window.prompt("Save current Codex account as:", "");
-  if (name == null) return;
+  const raw = window.prompt("Save current Codex account as:", "");
+  if (raw == null) return; // User cancelled.
+  const name = raw.trim();
+  if (!name) {
+    window.alert("Account name cannot be empty.");
+    return;
+  }
   await runSettingsAction(state, root, "save", { name }, "Saving account...");
 }
 

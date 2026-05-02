@@ -7,7 +7,8 @@ const {
   iconButton,
   accountPanelShell,
   setPanelStatus,
-  suggestedAccountName,
+  accountDisplayName,
+  bindButtonAction,
 } = require("./ui-components");
 
 // ─── Panel render ─────────────────────────────────────────────────────────────
@@ -16,7 +17,7 @@ function renderAccountPanel(state, panel, accountState) {
   panel.textContent = "";
   panel.setAttribute("data-codexpp-account-switcher", "panel");
 
-  // Header row: title + "Save current" button
+  // Header row
   const header = document.createElement("div");
   header.style.cssText =
     "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;";
@@ -26,14 +27,6 @@ function renderAccountPanel(state, panel, accountState) {
   title.style.cssText =
     "font-size:13px;font-weight:500;color:var(--color-token-text-primary,currentColor);";
   header.appendChild(title);
-
-  const save = smallButton("Save current");
-  save.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    void saveCurrentFromPopup(state, panel);
-  });
-  header.appendChild(save);
   panel.appendChild(header);
 
   const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
@@ -67,18 +60,14 @@ function renderAccountPanel(state, panel, accountState) {
     "display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;";
 
   const add = smallButton("Add another");
-  add.title = "Back up and clear active auth so Codex can log in with another account.";
-  add.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+  add.title = "Back up and clear active auth, then reload Codex to show the login screen.";
+  bindButtonAction(add, () => {
     void clearActiveForNewLogin(state, panel);
   });
   actions.appendChild(add);
 
   const refresh = iconButton("Refresh", "R");
-  refresh.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+  bindButtonAction(refresh, () => {
     void refreshPanel(state, panel);
   });
   actions.appendChild(refresh);
@@ -136,7 +125,7 @@ function accountSelectControl(state, panel, accountState, accounts) {
   for (const name of accounts) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = accountState.current === name ? `${name} (current)` : name;
+    option.textContent = accountDisplayName(accountState, name);
     select.appendChild(option);
   }
   select.value = current;
@@ -167,26 +156,22 @@ function accountRow(state, panel, accountState, name) {
 
   const label = document.createElement("button");
   label.type = "button";
-  label.textContent = accountState.current === name ? `${name} (current)` : name;
+  label.textContent = accountDisplayName(accountState, name);
+  label.title = accountDisplayName(accountState, name, { includeCurrent: false });
   label.style.cssText =
     "min-width:0;flex:1 1 auto;border:0;background:transparent;" +
     "color:var(--color-token-text-primary,currentColor);font:inherit;font-size:12px;" +
     "text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;";
-  label.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+  protectInteractiveControl(label);
+  bindButtonAction(label, () => {
     if (accountState.current === name) return;
     void runPanelAction(state, panel, "switch", { name }, "Switching...");
   });
   row.appendChild(label);
 
   const remove = iconButton(`Remove ${name}`, "x");
-  remove.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!window.confirm(`Remove saved account "${name}"? This does not log out the active session.`))
-      return;
-    void runPanelAction(state, panel, "delete", { name }, "Removing...");
+  bindButtonAction(remove, () => {
+    runPanelAction(state, panel, "delete", { name }, "Removing...");
   });
   row.appendChild(remove);
   return row;
@@ -194,25 +179,19 @@ function accountRow(state, panel, accountState, name) {
 
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
-async function saveCurrentFromPopup(state, panel) {
-  const suggested = suggestedAccountName(panel);
-  const name = window.prompt("Save current Codex account as:", suggested);
-  if (name == null) return;
-  await runPanelAction(state, panel, "save", { name }, "Saving...");
-}
-
-async function clearActiveForNewLogin(state, panel) {
-  const confirmed = window.confirm(
-    "This backs up and clears the active Codex auth file. Restart Codex, log in with the new account, then use Save current. Continue?",
-  );
-  if (!confirmed) return;
-  await runPanelAction(state, panel, "clear-active", {}, "Clearing active auth...");
+function clearActiveForNewLogin(state, panel) {
+  runPanelAction(state, panel, "clear-active", {}, "Clearing active auth...");
 }
 
 async function runPanelAction(state, panel, action, payload, loadingText) {
   setPanelStatus(panel, loadingText);
   try {
     const accountState = await invoke(state, action, payload);
+    if (action === "switch" || action === "clear-active") {
+      setPanelStatus(panel, authReloadMessage(action, accountState));
+      scheduleAppRelaunch(state, panel);
+      return;
+    }
     renderAccountPanel(state, panel, accountState);
     if (state.settingsRoot?.isConnected) {
       renderAccountsPageState(state, state.settingsRoot, accountState);
@@ -223,6 +202,24 @@ async function runPanelAction(state, panel, action, payload, loadingText) {
       error: errorMessage(error),
     });
   }
+}
+
+function authReloadMessage(action, accountState) {
+  if (action === "clear-active") {
+    return "Auth cleared. Relaunching Codex to show the login screen...";
+  }
+  const email = accountState.current
+    ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
+    : "selected account";
+  return `Switched to ${email}. Relaunching Codex to apply it...`;
+}
+
+function scheduleAppRelaunch(state, panel) {
+  window.setTimeout(() => {
+    invoke(state, "relaunch").catch((error) => {
+      setPanelStatus(panel, `Relaunch failed: ${errorMessage(error)}`);
+    });
+  }, 1200);
 }
 
 async function refreshPanel(state, panel) {

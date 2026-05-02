@@ -1,11 +1,12 @@
 {
-  "id": "me.erkin.account-switcher",
-  "name": "Account Switcher",
+  "id": "me.erkin.codex-plusplus-account-switcher",
+  "name": "Codex Account Switcher",
   "version": "0.1.0",
-  "description": "Adds Codex account save and switch controls to the settings sidebar and account popup.",
+  "description": "Adds Codex account switch controls to the settings sidebar and account popup.",
   "githubRepo": "erknvl/codex-plusplus-account-switcher",
   "author": {
-    "name": "erknvl"
+    "name": "erknvl",
+    "url": "https://github.com/erknvl/"
   },
   "tags": [
     "auth",
@@ -13,5 +14,5 @@
     "settings"
   ],
   "scope": "both",
-  "main": "index.js"
+  "main": "index.bundled.js"
 }

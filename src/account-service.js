@@ -13,11 +13,13 @@ function createAccountService(api) {
     async handle(message) {
       const action = message?.action;
       try {
+        api.log?.info?.(`[account-switcher] action ${String(action)}`);
         if (action === "state") return ok(await readState());
         if (action === "save") return ok(await saveCurrentAccount(message?.name));
-        if (action === "switch") return ok(await switchAccount(message?.name));
+        if (action === "switch") return ok(await switchAccount(message?.name, api));
         if (action === "delete") return ok(await deleteAccount(message?.name));
-        if (action === "clear-active") return ok(await clearActiveAuth());
+        if (action === "clear-active") return ok(await clearActiveAuth(api));
+        if (action === "relaunch") return ok(await relaunchCodex(api));
         return fail(`Unknown account action: ${String(action)}`);
       } catch (error) {
         api.log.warn("[account-switcher] action failed", stringifyError(error));
@@ -33,8 +35,10 @@ async function readState(extra = {}) {
   const accounts = await listAccountNames();
   const current = await getCurrentAccountName(accounts);
   const hasActiveAuth = await pathExists(AUTH_PATH);
+  const accountEmails = await readAccountEmails(accounts);
   return {
     accounts,
+    accountEmails,
     current,
     hasActiveAuth,
     paths: {
@@ -44,6 +48,40 @@ async function readState(extra = {}) {
     },
     ...extra,
   };
+}
+
+async function readAccountEmails(accounts) {
+  const entries = await Promise.all(
+    accounts.map(async (name) => [name, await readAccountEmail(accountPath(name))]),
+  );
+  return Object.fromEntries(entries.filter(([, email]) => email));
+}
+
+async function readAccountEmail(filePath) {
+  const { fsp } = nodeDeps();
+  try {
+    const auth = JSON.parse(await fsp.readFile(filePath, "utf8"));
+    return emailFromAuth(auth);
+  } catch {
+    return null;
+  }
+}
+
+function emailFromAuth(auth) {
+  const direct = auth?.email || auth?.user?.email || auth?.account?.email;
+  if (typeof direct === "string" && direct.includes("@")) return direct;
+
+  const idToken = auth?.tokens?.id_token;
+  if (typeof idToken !== "string") return null;
+  const [, payload] = idToken.split(".");
+  if (!payload) return null;
+
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return typeof claims.email === "string" && claims.email.includes("@") ? claims.email : null;
+  } catch {
+    return null;
+  }
 }
 
 async function listAccountNames() {
@@ -153,7 +191,7 @@ async function nextAvailableAccountName(baseName) {
   throw new Error("Could not find an available account name.");
 }
 
-async function switchAccount(rawName) {
+async function switchAccount(rawName, api) {
   const { fsp } = nodeDeps();
   const { CODEX_DIR, AUTH_PATH, CURRENT_NAME_PATH } = codexAuthPaths();
   const name = normalizeAccountName(rawName);
@@ -162,8 +200,10 @@ async function switchAccount(rawName) {
   await ensureDir(CODEX_DIR);
   await fsp.copyFile(source, AUTH_PATH);
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
+  api?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
   return readState({
-    notice: `Switched to ${name}. Restart Codex if this window still shows the old account.`,
+    notice: `Switched to ${name}. Relaunching Codex to apply it.`,
+    requiresAppRelaunch: true,
   });
 }
 
@@ -188,7 +228,7 @@ async function deleteAccount(rawName) {
   return readState({ notice: `Removed saved account ${name}.` });
 }
 
-async function clearActiveAuth() {
+async function clearActiveAuth(api) {
   const { fsp, path } = nodeDeps();
   const { CODEX_DIR, AUTH_PATH, CURRENT_NAME_PATH } = codexAuthPaths();
   await ensureDir(CODEX_DIR);
@@ -198,9 +238,22 @@ async function clearActiveAuth() {
     await fsp.rm(AUTH_PATH, { force: true });
   }
   await fsp.rm(CURRENT_NAME_PATH, { force: true });
+  api?.log?.info?.("[account-switcher] cleared active auth file; app relaunch required");
   return readState({
-    notice: "Cleared active auth. Restart Codex and log in, then use Save current account.",
+    notice: "Cleared active auth. Relaunching Codex to show the login screen.",
+    requiresAppRelaunch: true,
   });
+}
+
+async function relaunchCodex(api) {
+  api?.log?.info?.("[account-switcher] relaunch requested");
+  const electronRequire = eval("require");
+  const { app } = electronRequire("electron");
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 100);
+  return readState({ notice: "Relaunching Codex..." });
 }
 
 module.exports = { createAccountService };

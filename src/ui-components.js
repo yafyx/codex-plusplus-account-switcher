@@ -1,4 +1,40 @@
-const { protectInteractiveControl, compactText } = require("./dom-utils");
+const { protectInteractiveControl } = require("./dom-utils");
+
+function addButtonFeedback(element, styles) {
+  const normal = {
+    background: element.style.background || element.style.backgroundColor || "transparent",
+    color: element.style.color || "",
+    transform: element.style.transform || "",
+  };
+  const apply = (values) => {
+    if (values.background != null) element.style.background = values.background;
+    if (values.color != null) element.style.color = values.color;
+    if (values.transform != null) element.style.transform = values.transform;
+  };
+  const hover = styles.hover || {};
+  const active = styles.active || hover;
+  const restore = () => apply(styles.normal || normal);
+  element.style.transition = "background-color 120ms ease, color 120ms ease, transform 80ms ease";
+  element.addEventListener("pointerenter", () => {
+    if (element.disabled) return;
+    apply(hover);
+  });
+  element.addEventListener("pointerleave", restore);
+  element.addEventListener("focus", () => {
+    if (element.disabled) return;
+    apply(hover);
+  });
+  element.addEventListener("blur", restore);
+  element.addEventListener("pointerdown", () => {
+    if (element.disabled) return;
+    apply(active);
+  });
+  element.addEventListener("pointerup", () => {
+    if (element.disabled) return;
+    apply(hover);
+  });
+  element.addEventListener("pointercancel", restore);
+}
 
 // ─── Popup-panel buttons ──────────────────────────────────────────────────────
 
@@ -10,6 +46,15 @@ function smallButton(label) {
     "height:24px;border:0;border-radius:6px;padding:0 8px;" +
     "background:color-mix(in srgb,var(--color-token-text-primary,currentColor) 10%,transparent);" +
     "color:var(--color-token-text-primary,currentColor);font:inherit;font-size:12px;line-height:1;cursor:pointer;";
+  addButtonFeedback(button, {
+    hover: {
+      background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 16%,transparent)",
+    },
+    active: {
+      background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 22%,transparent)",
+      transform: "scale(0.98)",
+    },
+  });
   protectInteractiveControl(button);
   return button;
 }
@@ -24,6 +69,17 @@ function iconButton(label, text) {
     "display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:5px;" +
     "background:transparent;color:var(--color-token-text-secondary,currentColor);" +
     "font:inherit;font-size:16px;line-height:1;cursor:pointer;";
+  addButtonFeedback(button, {
+    hover: {
+      background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 10%,transparent)",
+      color: "var(--color-token-text-primary,currentColor)",
+    },
+    active: {
+      background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 18%,transparent)",
+      color: "var(--color-token-text-primary,currentColor)",
+      transform: "scale(0.94)",
+    },
+  });
   protectInteractiveControl(button);
   return button;
 }
@@ -39,6 +95,15 @@ function settingsButton(label) {
     "text-token-text-primary hover:bg-token-foreground/10 disabled:cursor-default disabled:opacity-50";
   button.style.border = "1px solid color-mix(in srgb, currentColor 14%, transparent)";
   button.style.backgroundColor = "color-mix(in srgb, currentColor 5%, transparent)";
+  addButtonFeedback(button, {
+    hover: {
+      background: "color-mix(in srgb, currentColor 10%, transparent)",
+    },
+    active: {
+      background: "color-mix(in srgb, currentColor 16%, transparent)",
+      transform: "scale(0.98)",
+    },
+  });
   protectInteractiveControl(button);
   return button;
 }
@@ -119,9 +184,24 @@ function settingsActionRow(titleText, descriptionText, actionText, onClick) {
   row.appendChild(left);
 
   const button = settingsButton(actionText);
-  button.addEventListener("click", onClick);
+  bindButtonAction(button, onClick);
   row.appendChild(button);
   return row;
+}
+
+function bindButtonAction(button, onAction) {
+  let lastRun = 0;
+  const run = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled) return;
+    const now = Date.now();
+    if (now - lastRun < 350) return;
+    lastRun = now;
+    onAction(event);
+  };
+  button.addEventListener("pointerup", run);
+  button.addEventListener("click", run);
 }
 
 function settingsStatus(text, isError = false) {
@@ -139,6 +219,7 @@ function settingsStatus(text, isError = false) {
 function accountPanelShell(base) {
   const panel = document.createElement("div");
   panel.setAttribute("data-codexpp-account-switcher", "panel");
+  panel.setAttribute("role", "presentation");
   panel.style.cssText = [
     "box-sizing:border-box",
     "width:calc(100% - 16px)",
@@ -150,7 +231,6 @@ function accountPanelShell(base) {
     "cursor:default",
     "user-select:none",
   ].join(";");
-  if (base?.className) panel.className = base.className;
   return panel;
 }
 
@@ -163,18 +243,10 @@ function setPanelStatus(panel, text) {
   panel.appendChild(status);
 }
 
-/**
- * Tries to guess an account name from the email shown in the surrounding menu.
- * @param {HTMLElement} panel
- */
-function suggestedAccountName(panel) {
-  const menu =
-    panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
-    panel.parentElement;
-  const text = compactText(menu);
-  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (match) return match[0].split("@")[0].replace(/[^a-zA-Z0-9._-]/g, "-");
-  return "";
+function accountDisplayName(accountState, name, options = {}) {
+  const email = accountState?.accountEmails?.[name];
+  const suffix = accountState?.current === name && options.includeCurrent !== false ? " (current)" : "";
+  return email ? `${email}${suffix}` : `${name}${suffix}`;
 }
 
 module.exports = {
@@ -187,7 +259,8 @@ module.exports = {
   settingsInfoRow,
   settingsActionRow,
   settingsStatus,
+  bindButtonAction,
   accountPanelShell,
   setPanelStatus,
-  suggestedAccountName,
+  accountDisplayName,
 };

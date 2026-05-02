@@ -8,6 +8,8 @@ const {
   settingsInfoRow,
   settingsActionRow,
   settingsStatus,
+  accountDisplayName,
+  bindButtonAction,
 } = require("./ui-components");
 
 // ─── Page lifecycle ───────────────────────────────────────────────────────────
@@ -33,10 +35,13 @@ function renderAccountsPageState(state, root, accountState) {
   const currentName =
     accountState.current ||
     (accountState.hasActiveAuth ? "Unsaved active account" : "No active account");
+  const currentValue = accountState.current
+    ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
+    : currentName;
   introCard.appendChild(
     settingsInfoRow(
       "Current account",
-      currentName,
+      currentValue,
       accountState.hasActiveAuth
         ? "The active session is stored in ~/.codex/auth.json."
         : "Codex does not currently have an auth.json file.",
@@ -50,16 +55,8 @@ function renderAccountsPageState(state, root, accountState) {
   const actionCard = settingsCard();
   actionCard.appendChild(
     settingsActionRow(
-      "Save current account",
-      "Store the current ~/.codex/auth.json as a named profile.",
-      "Save",
-      () => saveCurrentFromSettings(state, root),
-    ),
-  );
-  actionCard.appendChild(
-    settingsActionRow(
       "Add another account",
-      "Back up and clear active auth, then restart Codex and log in with another account.",
+      "Back up and clear active auth, then reload Codex to show the login screen.",
       "Prepare",
       () => clearActiveFromSettings(state, root),
     ),
@@ -81,7 +78,7 @@ function renderAccountsPageState(state, root, accountState) {
   const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
   if (!accounts.length) {
     savedCard.appendChild(
-      settingsInfoRow("No saved accounts", "Use Save current account after signing in.", ""),
+      settingsInfoRow("No saved accounts", "Sign in and refresh to autosave the active account.", ""),
     );
   } else {
     for (const name of accounts) {
@@ -105,7 +102,8 @@ function settingsAccountRow(state, root, accountState, name) {
 
   const title = document.createElement("div");
   title.className = "min-w-0 truncate text-sm text-token-text-primary";
-  title.textContent = accountState.current === name ? `${name} (current)` : name;
+  title.textContent = accountDisplayName(accountState, name);
+  title.title = accountDisplayName(accountState, name, { includeCurrent: false });
   left.appendChild(title);
 
   const desc = document.createElement("div");
@@ -122,15 +120,13 @@ function settingsAccountRow(state, root, accountState, name) {
 
   const switchButton = settingsButton("Switch");
   switchButton.disabled = accountState.current === name;
-  switchButton.addEventListener("click", () =>
+  bindButtonAction(switchButton, () =>
     runSettingsAction(state, root, "switch", { name }, "Switching account..."),
   );
   actionsEl.appendChild(switchButton);
 
   const removeButton = settingsButton("Delete");
-  removeButton.addEventListener("click", () => {
-    if (!window.confirm(`Remove saved account "${name}"? This does not log out the active session.`))
-      return;
+  bindButtonAction(removeButton, () => {
     runSettingsAction(state, root, "delete", { name }, "Removing account...");
   });
   actionsEl.appendChild(removeButton);
@@ -140,23 +136,8 @@ function settingsAccountRow(state, root, accountState, name) {
 
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
-async function saveCurrentFromSettings(state, root) {
-  const raw = window.prompt("Save current Codex account as:", "");
-  if (raw == null) return; // User cancelled.
-  const name = raw.trim();
-  if (!name) {
-    window.alert("Account name cannot be empty.");
-    return;
-  }
-  await runSettingsAction(state, root, "save", { name }, "Saving account...");
-}
-
-async function clearActiveFromSettings(state, root) {
-  const confirmed = window.confirm(
-    "This backs up and clears the active Codex auth file. Restart Codex, log in with the new account, then use Save current account. Continue?",
-  );
-  if (!confirmed) return;
-  await runSettingsAction(state, root, "clear-active", {}, "Preparing new login...");
+function clearActiveFromSettings(state, root) {
+  runSettingsAction(state, root, "clear-active", {}, "Preparing new login...");
 }
 
 async function runSettingsAction(state, root, action, payload, loadingText) {
@@ -164,6 +145,12 @@ async function runSettingsAction(state, root, action, payload, loadingText) {
   root.appendChild(settingsStatus(loadingText));
   try {
     const accountState = await invoke(state, action, payload);
+    if (action === "switch" || action === "clear-active") {
+      root.textContent = "";
+      root.appendChild(settingsStatus(authReloadMessage(action, accountState)));
+      scheduleAppRelaunch(state, root);
+      return;
+    }
     renderAccountsPageState(state, root, accountState);
   } catch (error) {
     renderAccountsPageState(state, root, {
@@ -171,6 +158,25 @@ async function runSettingsAction(state, root, action, payload, loadingText) {
       error: errorMessage(error),
     });
   }
+}
+
+function authReloadMessage(action, accountState) {
+  if (action === "clear-active") {
+    return "Auth cleared. Relaunching Codex to show the login screen...";
+  }
+  const email = accountState.current
+    ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
+    : "selected account";
+  return `Switched to ${email}. Relaunching Codex to apply it...`;
+}
+
+function scheduleAppRelaunch(state, root) {
+  window.setTimeout(() => {
+    invoke(state, "relaunch").catch((error) => {
+      root.textContent = "";
+      root.appendChild(settingsStatus(`Relaunch failed: ${errorMessage(error)}`, true));
+    });
+  }, 1200);
 }
 
 module.exports = {

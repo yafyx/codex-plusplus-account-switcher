@@ -78,6 +78,27 @@ function findSettingsAccountMenu() {
       ? candidate.querySelector('[role="menu"], [data-radix-menu-content]') || candidate
       : candidate;
   }
+  return findSidebarAccountMenuByItems();
+}
+
+function findSidebarAccountMenuByItems() {
+  const items = Array.from(
+    document.querySelectorAll('button, a, [role="menuitem"], [data-radix-collection-item]'),
+  ).filter((element) => element instanceof HTMLElement && isVisible(element));
+  const settings = items.find((element) => /\bsettings\b/i.test(compactText(element)));
+  const logout = items.find((element) => /\blog out\b/i.test(compactText(element)));
+  if (!settings || !logout) return null;
+
+  let node = settings.parentElement;
+  while (node && node !== document.body) {
+    if (node.contains(logout)) {
+      const text = compactText(node);
+      if (/\brate limits remaining\b/i.test(text) || /\bpersonal account\b/i.test(text)) {
+        return node;
+      }
+    }
+    node = node.parentElement;
+  }
   return null;
 }
 

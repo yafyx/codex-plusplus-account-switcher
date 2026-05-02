@@ -9,6 +9,7 @@ const {
   settingsActionRow,
   settingsStatus,
   accountDisplayName,
+  accountUsageSummary,
   bindButtonAction,
 } = require("./ui-components");
 
@@ -20,6 +21,7 @@ async function renderAccountsPage(state, root) {
   try {
     const accountState = await invoke(state, "state");
     renderAccountsPageState(state, root, accountState);
+    refreshUsageInBackground(state, root);
   } catch (error) {
     root.textContent = "";
     root.appendChild(settingsStatus(errorMessage(error), true));
@@ -113,9 +115,8 @@ function settingsAccountRow(state, root, accountState, name) {
   const desc = document.createElement("div");
   desc.className = "text-token-text-secondary min-w-0 text-sm";
   desc.textContent =
-    accountState.current === name
-      ? "Active in this Codex window."
-      : "Ready to switch.";
+    accountUsageSummary(accountState, name) ||
+    (accountState.current === name ? "Active in this Codex window." : "Usage not checked yet.");
   left.appendChild(desc);
   row.appendChild(left);
 
@@ -142,6 +143,23 @@ function settingsAccountRow(state, root, accountState, name) {
 
 function clearActiveFromSettings(state, root) {
   runSettingsAction(state, root, "clear-active", {}, "Preparing sign-in...");
+}
+
+function refreshUsageInBackground(state, root) {
+  const now = Date.now();
+  if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < 60_000) return;
+  state.usageRefreshInFlight = true;
+  state.lastUsageRefreshAt = now;
+  invoke(state, "refresh-usage")
+    .then((accountState) => {
+      if (root.isConnected) renderAccountsPageState(state, root, accountState);
+    })
+    .catch((error) => {
+      state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
+    })
+    .finally(() => {
+      state.usageRefreshInFlight = false;
+    });
 }
 
 async function runSettingsAction(state, root, action, payload, loadingText) {

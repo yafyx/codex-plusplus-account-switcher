@@ -78,7 +78,37 @@ function findSettingsAccountMenu() {
       ? candidate.querySelector('[role="menu"], [data-radix-menu-content]') || candidate
       : candidate;
   }
-  return findSidebarAccountMenuByItems();
+  return findAccountMenuByRateLimits() || findSidebarAccountMenuByItems();
+}
+
+function findAccountMenuByRateLimits() {
+  const rateLimits = findRateLimitsItem();
+  if (!rateLimits) return null;
+  const menu = rateLimits.closest(
+    '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]',
+  );
+  if (menu instanceof HTMLElement && isVisible(menu)) {
+    const text = compactText(menu);
+    if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || /\brate limits/i.test(text)) {
+      return menu.matches("[data-radix-popper-content-wrapper]")
+        ? menu.querySelector('[role="menu"], [data-radix-menu-content]') || menu
+        : menu;
+    }
+  }
+  const parent = rateLimits.parentElement;
+  return parent instanceof HTMLElement && isVisible(parent) ? parent : null;
+}
+
+function findRateLimitsItem(root = document) {
+  const candidates = root.querySelectorAll('button, a, [role="button"], [role="menuitem"]');
+  for (const element of candidates) {
+    if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
+    if (element.closest("[data-codexpp-account-switcher]")) continue;
+    const text = compactText(element).toLowerCase();
+    if (!/\brate limits remaining\b/.test(text) && !/\brate limits\b/.test(text)) continue;
+    return element;
+  }
+  return null;
 }
 
 function findSidebarAccountMenuByItems() {
@@ -104,8 +134,9 @@ function findSidebarAccountMenuByItems() {
 
 function installAccountSwitcher(state, menu) {
   const target =
-    findMenuItem(menu, /settings/i) ||
     findMenuItem(menu, /rate limits remaining/i) ||
+    findMenuItem(menu, /rate limits/i) ||
+    findMenuItem(menu, /settings/i) ||
     Array.from(menu.children).find((child) => child instanceof HTMLElement);
   if (!(target instanceof HTMLElement) || !target.parentElement) return;
 

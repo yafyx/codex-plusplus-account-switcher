@@ -24,12 +24,15 @@ module.exports = {
 
     const state = {
       api,
+      accountsExpanded: true,
       observer: null,
       pending: 0,
       disposed: false,
       disposers: [],
       lastState: null,
+      lastUsageRefreshAt: 0,
       settingsRoot: null,
+      usageRefreshInFlight: false,
     };
     this._state = state;
     startRenderer(state);

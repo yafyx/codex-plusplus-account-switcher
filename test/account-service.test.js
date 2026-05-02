@@ -45,3 +45,84 @@ test("state includes saved account email metadata", async () => {
     await fs.rm(home, { recursive: true, force: true });
   }
 });
+
+test("state includes cached account usage metadata", async () => {
+  const originalHome = process.env.HOME;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
+  process.env.HOME = home;
+  delete require.cache[require.resolve("../src/account-service")];
+
+  try {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), authWithEmail("work@example.com"));
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("work@example.com"));
+    await fs.writeFile(
+      path.join(codexDir, "auth_accounts_usage.json"),
+      JSON.stringify({
+        work: {
+          fiveHour: { label: "5h", pct: 72, resetAt: "8:30 PM" },
+          weekly: { label: "Weekly", pct: 91, resetAt: "Sat, 6:00 PM" },
+          at: 1777728000000,
+        },
+      }),
+    );
+
+    const { createAccountService } = require("../src/account-service");
+    const service = createAccountService({ log: { warn() {} } });
+    const result = await service.handle({ action: "state" });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.state.accountUsage, {
+      work: {
+        fiveHour: { label: "5h", pct: 72, resetAt: "8:30 PM" },
+        weekly: { label: "Weekly", pct: 91, resetAt: "Sat, 6:00 PM" },
+        at: 1777728000000,
+      },
+    });
+  } finally {
+    process.env.HOME = originalHome;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("refresh-usage stores active account usage", async () => {
+  const originalHome = process.env.HOME;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
+  process.env.HOME = home;
+  delete require.cache[require.resolve("../src/account-service")];
+
+  try {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), authWithEmail("work@example.com"));
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("work@example.com"));
+
+    const { createAccountService } = require("../src/account-service");
+    const service = createAccountService({
+      log: { warn() {} },
+      fetchActiveUsage: async () => ({
+        fiveHour: { label: "5h", pct: 64, resetAt: "9:00 PM" },
+        weekly: { label: "Weekly", pct: 88, resetAt: "Sun, 6:00 PM" },
+        at: 1777729000000,
+      }),
+    });
+    const result = await service.handle({ action: "refresh-usage" });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.state.accountUsage.work, {
+      fiveHour: { label: "5h", pct: 64, resetAt: "9:00 PM" },
+      weekly: { label: "Weekly", pct: 88, resetAt: "Sun, 6:00 PM" },
+      at: 1777729000000,
+    });
+    const usageCache = JSON.parse(
+      await fs.readFile(path.join(codexDir, "auth_accounts_usage.json"), "utf8"),
+    );
+    assert.equal(usageCache.work.fiveHour.pct, 64);
+  } finally {
+    process.env.HOME = originalHome;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});

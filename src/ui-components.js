@@ -222,11 +222,9 @@ function accountPanelShell(base) {
   panel.setAttribute("role", "presentation");
   panel.style.cssText = [
     "box-sizing:border-box",
-    "width:calc(100% - 16px)",
-    "margin:4px 8px 8px",
-    "padding:10px",
-    "border-top:1px solid var(--color-token-border-default,rgba(255,255,255,.12))",
-    "border-bottom:1px solid var(--color-token-border-default,rgba(255,255,255,.12))",
+    "width:100%",
+    "margin:0",
+    "padding:0",
     "color:var(--color-token-text-primary,currentColor)",
     "cursor:default",
     "user-select:none",
@@ -249,7 +247,33 @@ function accountDisplayName(accountState, name, options = {}) {
   return email ? `${email}${suffix}` : `${name}${suffix}`;
 }
 
+function accountUsageSummary(accountState, name) {
+  const usage = accountState?.accountUsage?.[name];
+  if (!usage || typeof usage !== "object") return null;
+  const parts = [];
+  if (typeof usage.fiveHour?.pct === "number") parts.push(`5h ${usage.fiveHour.pct}%`);
+  if (typeof usage.weekly?.pct === "number") parts.push(`Weekly ${usage.weekly.pct}%`);
+  if (!parts.length) return null;
+  const age = usageAgeLabel(usage.at);
+  return age ? `${parts.join(" · ")} · ${age}` : parts.join(" · ");
+}
+
+function usageAgeLabel(at) {
+  const time = Number(at);
+  if (!Number.isFinite(time)) return null;
+  const ageMs = Date.now() - time;
+  if (!Number.isFinite(ageMs) || ageMs < 0) return "just now";
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 module.exports = {
+  addButtonFeedback,
   smallButton,
   iconButton,
   settingsButton,
@@ -263,4 +287,5 @@ module.exports = {
   accountPanelShell,
   setPanelStatus,
   accountDisplayName,
+  accountUsageSummary,
 };

@@ -3,11 +3,11 @@ const { invoke } = require("./ipc");
 const { protectInteractiveControl } = require("./dom-utils");
 const { renderAccountsPageState } = require("./ui-settings");
 const {
-  smallButton,
-  iconButton,
   accountPanelShell,
   setPanelStatus,
   accountDisplayName,
+  accountUsageSummary,
+  addButtonFeedback,
   bindButtonAction,
 } = require("./ui-components");
 
@@ -17,27 +17,20 @@ function renderAccountPanel(state, panel, accountState) {
   panel.textContent = "";
   panel.setAttribute("data-codexpp-account-switcher", "panel");
 
-  // Header row
-  const header = document.createElement("div");
-  header.style.cssText =
-    "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;";
-
-  const title = document.createElement("div");
-  title.textContent = "Accounts";
-  title.style.cssText =
-    "font-size:13px;font-weight:500;color:var(--color-token-text-primary,currentColor);";
-  header.appendChild(title);
-  panel.appendChild(header);
-
   const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
+  const expanded = state.accountsExpanded !== false;
 
-  if (accounts.length > 0) {
-    panel.appendChild(accountSelectControl(state, panel, accountState, accounts));
+  const section = document.createElement("div");
+  section.style.cssText = "display:flex;flex-direction:column;padding:2px 0 4px;";
+  section.appendChild(accountsHeaderRow(state, panel, accountState, expanded));
+
+  if (!expanded) {
+    panel.appendChild(section);
+    return;
   }
 
-  // Account rows
   const list = document.createElement("div");
-  list.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+  list.style.cssText = "display:flex;flex-direction:column;min-width:0;margin-left:30px;";
 
   if (accounts.length === 0) {
     const empty = document.createElement("div");
@@ -52,33 +45,17 @@ function renderAccountPanel(state, panel, accountState) {
   for (const name of accounts) {
     list.appendChild(accountRow(state, panel, accountState, name));
   }
-  panel.appendChild(list);
 
-  // Footer: new sign-in + refresh
-  const actions = document.createElement("div");
-  actions.style.cssText =
-    "display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;";
-
-  const add = smallButton("New sign-in");
-  add.title = "Back up the current session, clear auth, and relaunch Codex for sign-in.";
-  bindButtonAction(add, () => {
-    void clearActiveForNewLogin(state, panel);
-  });
-  actions.appendChild(add);
-
-  const refresh = iconButton("Refresh", "R");
-  bindButtonAction(refresh, () => {
-    void refreshPanel(state, panel);
-  });
-  actions.appendChild(refresh);
-  panel.appendChild(actions);
+  list.appendChild(configureAccountsRow(state, panel));
+  section.appendChild(list);
+  panel.appendChild(section);
 
   // Notice / error
   if (accountState.notice || accountState.error) {
     const note = document.createElement("div");
     note.textContent = accountState.notice || accountState.error;
     note.style.cssText =
-      "margin-top:7px;font-size:11px;line-height:1.3;color:" +
+      "padding:0 24px 6px 70px;font-size:11px;line-height:1.3;color:" +
       (accountState.error
         ? "var(--color-token-text-error,#ff6b6b)"
         : "var(--color-token-text-secondary,currentColor)") +
@@ -87,94 +64,201 @@ function renderAccountPanel(state, panel, accountState) {
   }
 }
 
-// ─── Switch dropdown ──────────────────────────────────────────────────────────
+function accountsHeaderRow(state, panel, accountState, expanded) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("aria-expanded", expanded ? "true" : "false");
+  button.style.cssText =
+    "width:100%;border:0;background:transparent;color:var(--color-token-text-tertiary,currentColor);" +
+    "font:inherit;font-size:14px;text-align:left;border-radius:8px;" +
+    "padding:2px 0;cursor:pointer;display:grid;grid-template-columns:26px minmax(0,1fr) 20px;" +
+    "column-gap:4px;align-items:center;";
 
-function accountSelectControl(state, panel, accountState, accounts) {
-  const wrap = document.createElement("label");
-  wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-bottom:8px;";
+  button.appendChild(cloneAccountIcon(panel, accountState));
 
-  const label = document.createElement("span");
-  label.textContent = "Switch to";
-  label.style.cssText = "font-size:11px;color:var(--color-token-text-secondary,currentColor);";
-  wrap.appendChild(label);
+  const title = document.createElement("span");
+  title.textContent = "Accounts";
+  title.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-token-text-primary,currentColor);";
+  button.appendChild(title);
 
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", "Switch Codex account");
-  select.style.cssText = [
-    "box-sizing:border-box",
-    "width:100%",
-    "height:30px",
-    "border:1px solid color-mix(in srgb,currentColor 16%,transparent)",
-    "border-radius:6px",
-    "padding:0 8px",
-    "background:var(--color-background-panel,var(--color-token-bg-primary,transparent))",
-    "color:var(--color-token-text-primary,currentColor)",
-    "font:inherit",
-    "font-size:12px",
-    "cursor:pointer",
-  ].join(";");
+  const chevronSlot = document.createElement("span");
+  chevronSlot.style.cssText =
+    "display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding-right:12px;";
+  chevronSlot.appendChild(cloneRateLimitsChevron(panel, expanded));
+  button.appendChild(chevronSlot);
 
-  const current = accountState.current || "";
-  if (!current) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "Unsaved account";
-    select.appendChild(option);
-  }
-
-  for (const name of accounts) {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = accountDisplayName(accountState, name);
-    select.appendChild(option);
-  }
-  select.value = current;
-  protectInteractiveControl(select, { preventClickDefault: false });
-  select.addEventListener("change", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const name = select.value;
-    if (!name || name === accountState.current) return;
-    void runPanelAction(state, panel, "switch", { name }, "Switching account...");
+  addButtonFeedback(button, {
+    normal: { background: "transparent" },
+    hover: { background: "color-mix(in srgb,currentColor 8%,transparent)" },
+    active: {
+      background: "color-mix(in srgb,currentColor 12%,transparent)",
+      transform: "scale(0.99)",
+    },
   });
+  protectInteractiveControl(button);
+  bindButtonAction(button, () => {
+    state.accountsExpanded = !expanded;
+    renderAccountPanel(state, panel, accountState);
+  });
+  return button;
+}
 
-  wrap.appendChild(select);
-  return wrap;
+function cloneAccountIcon(panel, accountState) {
+  const icon = findAccountMenuIcon(panel, accountState);
+  const slot = document.createElement("span");
+  slot.setAttribute("aria-hidden", "true");
+  slot.style.cssText =
+    "display:flex;align-items:center;justify-content:center;height:27px;width:30px;" +
+    "color:var(--color-token-text-secondary,currentColor);";
+
+  if (icon) {
+    const clone = icon.cloneNode(true);
+    clone.setAttribute("aria-hidden", "true");
+    slot.appendChild(clone);
+    return slot;
+  }
+
+  slot.textContent = "◎";
+  slot.style.fontSize = "15px";
+  return slot;
+}
+
+function findAccountMenuIcon(panel, accountState) {
+  const menu =
+    panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
+    document;
+  const current = accountState.current
+    ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
+    : "";
+  const candidates = Array.from(menu.querySelectorAll('button, a, [role="menuitem"], div'));
+  const accountRow = candidates.find((element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const text = element.textContent || "";
+    return (current && text.includes(current)) || /@/.test(text);
+  });
+  if (!(accountRow instanceof HTMLElement)) return null;
+  return accountRow.querySelector("svg");
+}
+
+function cloneRateLimitsChevron(panel, expanded) {
+  const chevron = findRateLimitsChevron(panel);
+  if (chevron) {
+    const clone = chevron.cloneNode(true);
+    clone.setAttribute("aria-hidden", "true");
+    clone.style.transform = expanded ? "rotate(90deg)" : "rotate(0deg)";
+    clone.style.transformOrigin = "center";
+    return clone;
+  }
+
+  const spacer = document.createElement("span");
+  spacer.setAttribute("aria-hidden", "true");
+  return spacer;
+}
+
+function findRateLimitsChevron(panel) {
+  const menu =
+    panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
+    document;
+  const rateLimits = Array.from(menu.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
+    return element instanceof HTMLElement && /\brate limits/i.test(element.textContent || "");
+  });
+  if (!(rateLimits instanceof HTMLElement)) return null;
+  const icons = Array.from(rateLimits.querySelectorAll("svg"));
+  return icons.length ? icons[icons.length - 1] : null;
 }
 
 // ─── Per-account row ──────────────────────────────────────────────────────────
 
 function accountRow(state, panel, accountState, name) {
-  const row = document.createElement("div");
+  const row = document.createElement("button");
+  row.type = "button";
+  row.title = accountDisplayName(accountState, name, { includeCurrent: false });
+  const normalBackground =
+    accountState.current === name
+      ? "var(--color-token-list-hover-background, var(--color-token-bg-tertiary, color-mix(in srgb,currentColor 8%,transparent)))"
+      : "transparent";
   row.style.cssText =
-    "display:flex;align-items:center;justify-content:space-between;gap:8px;" +
-    "min-height:28px;border-radius:6px;padding:3px 4px 3px 8px;background:" +
-    (accountState.current === name
-      ? "color-mix(in srgb,var(--color-token-text-link-foreground,currentColor) 14%,transparent)"
-      : "transparent") +
-    ";";
-
-  const label = document.createElement("button");
-  label.type = "button";
-  label.textContent = accountDisplayName(accountState, name);
-  label.title = accountDisplayName(accountState, name, { includeCurrent: false });
-  label.style.cssText =
-    "min-width:0;flex:1 1 auto;border:0;background:transparent;" +
-    "color:var(--color-token-text-primary,currentColor);font:inherit;font-size:12px;" +
-    "text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;";
-  protectInteractiveControl(label);
-  bindButtonAction(label, () => {
+    "width:100%;border:0;text-align:left;font:inherit;display:flex;flex-direction:column;gap:2px;" +
+    `border-radius:8px;margin-left:-8px;margin-right:-8px;padding:4px 8px;background:${normalBackground};` +
+    "color:var(--color-token-text-primary,currentColor);cursor:pointer;";
+  const nameText = document.createElement("span");
+  nameText.textContent = accountDisplayName(accountState, name);
+  nameText.style.cssText =
+    "display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;";
+  row.appendChild(nameText);
+  const usage = accountUsageSummary(accountState, name);
+  if (usage) {
+    const usageText = document.createElement("span");
+    usageText.textContent = usage;
+    usageText.style.cssText =
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+      "color:var(--color-token-text-secondary,currentColor);font-size:11px;";
+    row.appendChild(usageText);
+  }
+  addButtonFeedback(row, {
+    normal: { background: normalBackground },
+    hover: {
+      background: accountState.current === name
+        ? "var(--color-token-list-hover-background, var(--color-token-bg-tertiary, color-mix(in srgb,currentColor 10%,transparent)))"
+        : "var(--color-token-list-hover-background, color-mix(in srgb,currentColor 8%,transparent))",
+    },
+    active: {
+      background: accountState.current === name
+        ? "var(--color-token-list-active-selection-background, var(--color-token-list-hover-background, color-mix(in srgb,currentColor 12%,transparent)))"
+        : "var(--color-token-list-hover-background, color-mix(in srgb,currentColor 12%,transparent))",
+      transform: "scale(0.99)",
+    },
+  });
+  protectInteractiveControl(row);
+  bindButtonAction(row, () => {
     if (accountState.current === name) return;
     void runPanelAction(state, panel, "switch", { name }, "Switching account...");
   });
-  row.appendChild(label);
-
-  const remove = iconButton(`Remove ${name}`, "x");
-  bindButtonAction(remove, () => {
-    runPanelAction(state, panel, "delete", { name }, "Removing...");
-  });
-  row.appendChild(remove);
   return row;
+}
+
+function configureAccountsRow(state, panel) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Configure accounts";
+  button.style.cssText =
+    "width:100%;border:0;background:transparent;color:var(--color-token-text-secondary,currentColor);" +
+    "font:inherit;font-size:13px;text-align:left;border-radius:8px;margin-left:-8px;margin-right:-8px;" +
+    "padding:5px 8px;cursor:pointer;";
+  addButtonFeedback(button, {
+    normal: { background: "transparent" },
+    hover: { background: "color-mix(in srgb,currentColor 8%,transparent)" },
+    active: {
+      background: "color-mix(in srgb,currentColor 12%,transparent)",
+      transform: "scale(0.99)",
+    },
+  });
+  protectInteractiveControl(button);
+  bindButtonAction(button, () => openAccountsSettings(state, panel));
+  return button;
+}
+
+function openAccountsSettings(state, panel) {
+  const menu =
+    panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
+    document;
+  const settingsItem = findMenuCommand(menu, /settings/i);
+  settingsItem?.click();
+  window.setTimeout(() => {
+    const accountsNav = Array.from(
+      document.querySelectorAll('button[data-codexpp^="nav-page-"], button'),
+    ).find((element) => {
+      return element instanceof HTMLElement && /\baccounts\b/i.test(element.textContent || "");
+    });
+    if (accountsNav instanceof HTMLElement) accountsNav.click();
+  }, 300);
+  panel.remove();
+}
+
+function findMenuCommand(root, pattern) {
+  return Array.from(root.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
+    return element instanceof HTMLElement && pattern.test(element.textContent || "");
+  });
 }
 
 // ─── User-initiated actions ───────────────────────────────────────────────────
@@ -227,9 +311,30 @@ async function refreshPanel(state, panel) {
   try {
     const accountState = await invoke(state, "state");
     renderAccountPanel(state, panel, accountState);
+    refreshUsageInBackground(state, panel);
   } catch (error) {
     setPanelStatus(panel, errorMessage(error));
   }
+}
+
+function refreshUsageInBackground(state, panel) {
+  const now = Date.now();
+  if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < 60_000) return;
+  state.usageRefreshInFlight = true;
+  state.lastUsageRefreshAt = now;
+  invoke(state, "refresh-usage")
+    .then((accountState) => {
+      if (panel.isConnected) renderAccountPanel(state, panel, accountState);
+      if (state.settingsRoot?.isConnected) {
+        renderAccountsPageState(state, state.settingsRoot, accountState);
+      }
+    })
+    .catch((error) => {
+      state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
+    })
+    .finally(() => {
+      state.usageRefreshInFlight = false;
+    });
 }
 
 module.exports = { renderAccountPanel, accountPanelShell, refreshPanel };

@@ -786,11 +786,19 @@ var require_ui_components = __commonJS({
       const usage = accountState?.accountUsage?.[name];
       if (!usage || typeof usage !== "object") return null;
       const parts = [];
-      if (typeof usage.fiveHour?.pct === "number") parts.push(`5h ${usage.fiveHour.pct}%`);
-      if (typeof usage.weekly?.pct === "number") parts.push(`Weekly ${usage.weekly.pct}%`);
+      const fiveHour = usageWindowSummary(usage.fiveHour, "5h");
+      const weekly = usageWindowSummary(usage.weekly, "Weekly");
+      if (fiveHour) parts.push(fiveHour);
+      if (weekly) parts.push(weekly);
       if (!parts.length) return null;
       const age = usageAgeLabel(usage.at);
       return age ? `${parts.join(" \xB7 ")} \xB7 ${age}` : parts.join(" \xB7 ");
+    }
+    function usageWindowSummary(window2, fallbackLabel) {
+      if (typeof window2?.pct !== "number") return null;
+      const label = window2.label || fallbackLabel;
+      const reset = window2.pct <= 0 && window2.resetAt ? `, resets ${window2.resetAt}` : "";
+      return `${label} ${window2.pct}%${reset}`;
     }
     function usageAgeLabel(at) {
       const time = Number(at);
@@ -1014,6 +1022,8 @@ var require_ui_popup = __commonJS({
       addButtonFeedback,
       bindButtonAction
     } = require_ui_components();
+    var ACCOUNTS_PANEL_TRANSITION_MS = 160;
+    var ACCOUNTS_PANEL_EASING = "cubic-bezier(0.2, 0, 0, 1)";
     function renderAccountPanel(state, panel, accountState) {
       panel.textContent = "";
       panel.setAttribute("data-codexpp-account-switcher", "panel");
@@ -1038,7 +1048,25 @@ var require_ui_popup = __commonJS({
         list.appendChild(accountRow(state, panel, accountState, name));
       }
       list.appendChild(configureAccountsRow(state, panel));
-      section.appendChild(list);
+      const body = document.createElement("div");
+      body.setAttribute("data-codexpp-account-switcher-body", "accounts");
+      body.style.cssText = `display:grid;grid-template-rows:1fr;overflow:hidden;opacity:1;transition:grid-template-rows ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING},opacity ${ACCOUNTS_PANEL_TRANSITION_MS}ms ease;`;
+      if (state.accountsExpanding && !prefersReducedMotion()) {
+        body.style.gridTemplateRows = "0fr";
+        body.style.opacity = "0";
+        window.requestAnimationFrame(() => {
+          body.style.gridTemplateRows = "1fr";
+          body.style.opacity = "1";
+        });
+      }
+      if (state.accountsExpanding) {
+        state.accountsExpanding = false;
+      }
+      const bodyInner = document.createElement("div");
+      bodyInner.style.cssText = "min-height:0;overflow:hidden;";
+      bodyInner.appendChild(list);
+      body.appendChild(bodyInner);
+      section.appendChild(body);
       panel.appendChild(section);
       if (accountState.notice || accountState.error) {
         const note = document.createElement("div");
@@ -1070,17 +1098,47 @@ var require_ui_popup = __commonJS({
         }
       });
       protectInteractiveControl(button);
-      bindButtonAction(button, () => {
-        state.accountsExpanded = !expanded;
-        renderAccountPanel(state, panel, accountState);
-      });
+      bindButtonAction(button, () => toggleAccountsExpanded(state, panel, accountState, expanded));
       return button;
+    }
+    function toggleAccountsExpanded(state, panel, accountState, expanded) {
+      if (!expanded) {
+        state.accountsExpanded = true;
+        state.accountsExpanding = true;
+        renderAccountPanel(state, panel, accountState);
+        return;
+      }
+      const body = panel.querySelector("[data-codexpp-account-switcher-body='accounts']");
+      const header = panel.querySelector("button[aria-expanded='true']");
+      header?.setAttribute("aria-expanded", "false");
+      const chevron = header?.querySelector("svg");
+      if (chevron instanceof SVGElement) {
+        chevron.style.transform = "rotate(0deg)";
+      }
+      if (!(body instanceof HTMLElement) || prefersReducedMotion()) {
+        state.accountsExpanded = false;
+        renderAccountPanel(state, panel, accountState);
+        return;
+      }
+      body.style.gridTemplateRows = "1fr";
+      body.style.opacity = "1";
+      window.requestAnimationFrame(() => {
+        body.style.gridTemplateRows = "0fr";
+        body.style.opacity = "0";
+      });
+      window.setTimeout(() => {
+        state.accountsExpanded = false;
+        renderAccountPanel(state, panel, accountState);
+      }, ACCOUNTS_PANEL_TRANSITION_MS);
+    }
+    function prefersReducedMotion() {
+      return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
     }
     function cloneAccountIcon(panel, accountState) {
       const icon = findAccountMenuIcon(panel, accountState);
       const slot = document.createElement("span");
       slot.setAttribute("aria-hidden", "true");
-      slot.style.cssText = "display:flex;align-items:center;justify-content:center;height:27px;width:30px;color:var(--color-token-text-secondary,currentColor);";
+      slot.style.cssText = "display:flex;align-items:center;justify-content:center;height:27px;width:30px;padding-left:2px;color:var(--color-token-text-primary,currentColor);";
       if (icon) {
         const clone = icon.cloneNode(true);
         clone.setAttribute("aria-hidden", "true");
@@ -1110,6 +1168,7 @@ var require_ui_popup = __commonJS({
         clone.setAttribute("aria-hidden", "true");
         clone.style.transform = expanded ? "rotate(90deg)" : "rotate(0deg)";
         clone.style.transformOrigin = "center";
+        clone.style.transition = `transform ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING}`;
         return clone;
       }
       const spacer = document.createElement("span");

@@ -8,7 +8,7 @@ Codex++ tweak for saving, switching, and managing Codex desktop auth sessions.
 - Shows saved accounts by email when an email is available in the auth token.
 - Adds a compact collapsible Accounts section to Codex's account popup, anchored above Rate limits remaining.
 - Switches accounts directly from the account popup. Switching replaces the active auth file and relaunches Codex.
-- Shows cached 5-hour and weekly rate-limit remaining values for accounts that have been active.
+- Shows cached 5-hour and weekly rate-limit remaining values for accounts that have been active, including the reset time when a window is exhausted.
 - Adds a dedicated Accounts settings page for setup, refresh, switching, deletion, and new sign-in flows.
 - Starts a new sign-in by backing up and clearing the active auth file, then relaunching Codex.
 

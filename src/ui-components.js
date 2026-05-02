@@ -251,11 +251,20 @@ function accountUsageSummary(accountState, name) {
   const usage = accountState?.accountUsage?.[name];
   if (!usage || typeof usage !== "object") return null;
   const parts = [];
-  if (typeof usage.fiveHour?.pct === "number") parts.push(`5h ${usage.fiveHour.pct}%`);
-  if (typeof usage.weekly?.pct === "number") parts.push(`Weekly ${usage.weekly.pct}%`);
+  const fiveHour = usageWindowSummary(usage.fiveHour, "5h");
+  const weekly = usageWindowSummary(usage.weekly, "Weekly");
+  if (fiveHour) parts.push(fiveHour);
+  if (weekly) parts.push(weekly);
   if (!parts.length) return null;
   const age = usageAgeLabel(usage.at);
   return age ? `${parts.join(" · ")} · ${age}` : parts.join(" · ");
+}
+
+function usageWindowSummary(window, fallbackLabel) {
+  if (typeof window?.pct !== "number") return null;
+  const label = window.label || fallbackLabel;
+  const reset = window.pct <= 0 && window.resetAt ? `, resets ${window.resetAt}` : "";
+  return `${label} ${window.pct}%${reset}`;
 }
 
 function usageAgeLabel(at) {

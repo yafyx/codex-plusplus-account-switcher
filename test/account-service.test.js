@@ -126,3 +126,28 @@ test("refresh-usage stores active account usage", async () => {
     await fs.rm(home, { recursive: true, force: true });
   }
 });
+
+test("usage summary includes reset time for exhausted windows", () => {
+  const { accountUsageSummary } = require("../src/ui-components");
+  const originalNow = Date.now;
+  Date.now = () => 1777728300000;
+
+  try {
+    const summary = accountUsageSummary(
+      {
+        accountUsage: {
+          work: {
+            fiveHour: { label: "5h", pct: 0, resetAt: "8:30 PM" },
+            weekly: { label: "Weekly", pct: 0, resetAt: "Sat, 6:00 PM" },
+            at: 1777728000000,
+          },
+        },
+      },
+      "work",
+    );
+
+    assert.equal(summary, "5h 0%, resets 8:30 PM · Weekly 0%, resets Sat, 6:00 PM · 5m ago");
+  } finally {
+    Date.now = originalNow;
+  }
+});

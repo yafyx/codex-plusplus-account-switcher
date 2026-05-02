@@ -11,6 +11,9 @@ const {
   bindButtonAction,
 } = require("./ui-components");
 
+const ACCOUNTS_PANEL_TRANSITION_MS = 160;
+const ACCOUNTS_PANEL_EASING = "cubic-bezier(0.2, 0, 0, 1)";
+
 // ─── Panel render ─────────────────────────────────────────────────────────────
 
 function renderAccountPanel(state, panel, accountState) {
@@ -47,7 +50,28 @@ function renderAccountPanel(state, panel, accountState) {
   }
 
   list.appendChild(configureAccountsRow(state, panel));
-  section.appendChild(list);
+  const body = document.createElement("div");
+  body.setAttribute("data-codexpp-account-switcher-body", "accounts");
+  body.style.cssText =
+    "display:grid;grid-template-rows:1fr;overflow:hidden;opacity:1;" +
+    `transition:grid-template-rows ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING},` +
+    `opacity ${ACCOUNTS_PANEL_TRANSITION_MS}ms ease;`;
+  if (state.accountsExpanding && !prefersReducedMotion()) {
+    body.style.gridTemplateRows = "0fr";
+    body.style.opacity = "0";
+    window.requestAnimationFrame(() => {
+      body.style.gridTemplateRows = "1fr";
+      body.style.opacity = "1";
+    });
+  }
+  if (state.accountsExpanding) {
+    state.accountsExpanding = false;
+  }
+  const bodyInner = document.createElement("div");
+  bodyInner.style.cssText = "min-height:0;overflow:hidden;";
+  bodyInner.appendChild(list);
+  body.appendChild(bodyInner);
+  section.appendChild(body);
   panel.appendChild(section);
 
   // Notice / error
@@ -96,11 +120,47 @@ function accountsHeaderRow(state, panel, accountState, expanded) {
     },
   });
   protectInteractiveControl(button);
-  bindButtonAction(button, () => {
-    state.accountsExpanded = !expanded;
-    renderAccountPanel(state, panel, accountState);
-  });
+  bindButtonAction(button, () => toggleAccountsExpanded(state, panel, accountState, expanded));
   return button;
+}
+
+function toggleAccountsExpanded(state, panel, accountState, expanded) {
+  if (!expanded) {
+    state.accountsExpanded = true;
+    state.accountsExpanding = true;
+    renderAccountPanel(state, panel, accountState);
+    return;
+  }
+
+  const body = panel.querySelector("[data-codexpp-account-switcher-body='accounts']");
+  const header = panel.querySelector("button[aria-expanded='true']");
+  header?.setAttribute("aria-expanded", "false");
+  const chevron = header?.querySelector("svg");
+  if (chevron instanceof SVGElement) {
+    chevron.style.transform = "rotate(0deg)";
+  }
+
+  if (!(body instanceof HTMLElement) || prefersReducedMotion()) {
+    state.accountsExpanded = false;
+    renderAccountPanel(state, panel, accountState);
+    return;
+  }
+
+  body.style.gridTemplateRows = "1fr";
+  body.style.opacity = "1";
+  window.requestAnimationFrame(() => {
+    body.style.gridTemplateRows = "0fr";
+    body.style.opacity = "0";
+  });
+
+  window.setTimeout(() => {
+    state.accountsExpanded = false;
+    renderAccountPanel(state, panel, accountState);
+  }, ACCOUNTS_PANEL_TRANSITION_MS);
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 }
 
 function cloneAccountIcon(panel, accountState) {
@@ -108,8 +168,8 @@ function cloneAccountIcon(panel, accountState) {
   const slot = document.createElement("span");
   slot.setAttribute("aria-hidden", "true");
   slot.style.cssText =
-    "display:flex;align-items:center;justify-content:center;height:27px;width:30px;" +
-    "color:var(--color-token-text-secondary,currentColor);";
+    "display:flex;align-items:center;justify-content:center;height:27px;width:30px;padding-left:2px;" +
+    "color:var(--color-token-text-primary,currentColor);";
 
   if (icon) {
     const clone = icon.cloneNode(true);
@@ -147,6 +207,7 @@ function cloneRateLimitsChevron(panel, expanded) {
     clone.setAttribute("aria-hidden", "true");
     clone.style.transform = expanded ? "rotate(90deg)" : "rotate(0deg)";
     clone.style.transformOrigin = "center";
+    clone.style.transition = `transform ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING}`;
     return clone;
   }
 

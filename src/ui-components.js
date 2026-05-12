@@ -1,5 +1,7 @@
 const { protectInteractiveControl } = require("./dom-utils");
 
+const PANEL_ROW_LEFT_INSET = 30;
+
 function addButtonFeedback(element, styles) {
   const normal = {
     background: element.style.background || element.style.backgroundColor || "transparent",
@@ -237,7 +239,8 @@ function setPanelStatus(panel, text) {
   const status = document.createElement("div");
   status.textContent = text;
   status.style.cssText =
-    "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0;";
+    `font-size:12px;line-height:1.35;color:var(--color-token-text-secondary,currentColor);` +
+    `padding:4px 24px 6px ${PANEL_ROW_LEFT_INSET}px;`;
   panel.appendChild(status);
 }
 
@@ -256,8 +259,7 @@ function accountUsageSummary(accountState, name) {
   if (fiveHour) parts.push(fiveHour);
   if (weekly) parts.push(weekly);
   if (!parts.length) return null;
-  const age = usageAgeLabel(usage.at);
-  return age ? `${parts.join(" · ")} · ${age}` : parts.join(" · ");
+  return parts.join(" · ");
 }
 
 function usageWindowSummary(window, fallbackLabel) {
@@ -267,21 +269,8 @@ function usageWindowSummary(window, fallbackLabel) {
   return `${label} ${window.pct}%${reset}`;
 }
 
-function usageAgeLabel(at) {
-  const time = Number(at);
-  if (!Number.isFinite(time)) return null;
-  const ageMs = Date.now() - time;
-  if (!Number.isFinite(ageMs) || ageMs < 0) return "just now";
-  const minutes = Math.floor(ageMs / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
 module.exports = {
+  PANEL_ROW_LEFT_INSET,
   addButtonFeedback,
   smallButton,
   iconButton,

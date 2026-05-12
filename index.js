@@ -9,7 +9,7 @@
  */
 
 const { GLOBAL_SERVICE_KEY, IPC_HANDLER_KEY, IPC_CHANNEL } = require("./src/constants");
-const { createAccountService } = require("./src/account-service");
+const { createAccountService } = require("./src/account/service");
 const { startRenderer } = require("./src/renderer");
 
 // ─── Tweak export ─────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 const { errorMessage } = require("./utils");
 const { invoke } = require("./ipc");
+const { t } = require("./i18n");
 const {
   settingsButton,
   settingsSection,
@@ -17,7 +18,7 @@ const {
 
 async function renderAccountsPage(state, root) {
   root.textContent = "";
-  root.appendChild(settingsStatus("Loading saved accounts..."));
+  root.appendChild(settingsStatus(t("accounts.loading")));
   try {
     const accountState = await invoke(state, "state");
     renderAccountsPageState(state, root, accountState);
@@ -32,42 +33,42 @@ function renderAccountsPageState(state, root, accountState) {
   root.textContent = "";
 
   // ── Current account info ─────────────────────────────────────────────────
-  const intro = settingsSection("Active session");
+  const intro = settingsSection(t("settings.activeSession"));
   const introCard = settingsCard();
   const currentName =
     accountState.current ||
-    (accountState.hasActiveAuth ? "Unsaved account" : "No active session");
+    (accountState.hasActiveAuth ? t("settings.unsavedAccount") : t("settings.noActiveSession"));
   const currentValue = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
     : currentName;
   introCard.appendChild(
     settingsInfoRow(
-      "Signed in as",
+      t("settings.signedInAs"),
       currentValue,
       accountState.hasActiveAuth
-        ? "Codex is using the session stored in ~/.codex/auth.json."
-        : "No active auth file exists at ~/.codex/auth.json.",
+        ? t("settings.activeAuthDescription")
+        : t("settings.noAuthDescription"),
     ),
   );
   intro.appendChild(introCard);
   root.appendChild(intro);
 
   // ── Actions ──────────────────────────────────────────────────────────────
-  const actions = settingsSection("Account setup");
+  const actions = settingsSection(t("settings.accountSetup"));
   const actionCard = settingsCard();
   actionCard.appendChild(
     settingsActionRow(
-      "Sign in to another account",
-      "Back up the current session, clear auth, and relaunch Codex for sign-in.",
-      "Start sign-in",
+      t("settings.signInAnother"),
+      t("settings.signInAnotherDescription"),
+      t("settings.startSignIn"),
       () => clearActiveFromSettings(state, root),
     ),
   );
   actionCard.appendChild(
     settingsActionRow(
-      "Refresh saved accounts",
-      "Rescan saved sessions in ~/.codex/auth_accounts.",
-      "Refresh",
+      t("settings.refreshSaved"),
+      t("settings.refreshSavedDescription"),
+      t("settings.refresh"),
       () => renderAccountsPage(state, root),
     ),
   );
@@ -75,15 +76,15 @@ function renderAccountsPageState(state, root, accountState) {
   root.appendChild(actions);
 
   // ── Saved accounts list ──────────────────────────────────────────────────
-  const saved = settingsSection("Saved accounts");
+  const saved = settingsSection(t("settings.savedAccounts"));
   const savedCard = settingsCard();
   const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
   if (!accounts.length) {
     savedCard.appendChild(
       settingsInfoRow(
-        "No saved accounts yet",
-        "None found",
-        "Use Sign in to another account to create one.",
+        t("settings.noSavedAccounts"),
+        t("settings.noneFound"),
+        t("settings.noSavedAccountsDescription"),
       ),
     );
   } else {
@@ -116,23 +117,23 @@ function settingsAccountRow(state, root, accountState, name) {
   desc.className = "text-token-text-secondary min-w-0 text-sm";
   desc.textContent =
     accountUsageSummary(accountState, name) ||
-    (accountState.current === name ? "Active in this Codex window." : "Usage not checked yet.");
+    (accountState.current === name ? t("settings.activeInWindow") : t("settings.usageUnchecked"));
   left.appendChild(desc);
   row.appendChild(left);
 
   const actionsEl = document.createElement("div");
   actionsEl.className = "flex shrink-0 items-center gap-2";
 
-  const switchButton = settingsButton("Switch");
+  const switchButton = settingsButton(t("settings.switch"));
   switchButton.disabled = accountState.current === name;
   bindButtonAction(switchButton, () =>
-    runSettingsAction(state, root, "switch", { name }, "Switching account..."),
+    runSettingsAction(state, root, "switch", { name }, t("accounts.switching")),
   );
   actionsEl.appendChild(switchButton);
 
-  const removeButton = settingsButton("Delete");
+  const removeButton = settingsButton(t("settings.delete"));
   bindButtonAction(removeButton, () => {
-    runSettingsAction(state, root, "delete", { name }, "Removing account...");
+    runSettingsAction(state, root, "delete", { name }, t("settings.removing"));
   });
   actionsEl.appendChild(removeButton);
   row.appendChild(actionsEl);
@@ -142,7 +143,7 @@ function settingsAccountRow(state, root, accountState, name) {
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
 function clearActiveFromSettings(state, root) {
-  runSettingsAction(state, root, "clear-active", {}, "Preparing sign-in...");
+  runSettingsAction(state, root, "clear-active", {}, t("accounts.preparingSignIn"));
 }
 
 function refreshUsageInBackground(state, root) {
@@ -184,19 +185,19 @@ async function runSettingsAction(state, root, action, payload, loadingText) {
 
 function authReloadMessage(action, accountState) {
   if (action === "clear-active") {
-    return "Session cleared. Relaunching Codex for sign-in...";
+    return t("accounts.sessionClearedRelaunching");
   }
   const email = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
-    : "selected account";
-  return `Switched to ${email}. Relaunching Codex...`;
+    : t("accounts.selected");
+  return t("accounts.switchedRelaunching", { email });
 }
 
 function scheduleAppRelaunch(state, root) {
   window.setTimeout(() => {
     invoke(state, "relaunch").catch((error) => {
       root.textContent = "";
-      root.appendChild(settingsStatus(`Relaunch failed: ${errorMessage(error)}`, true));
+      root.appendChild(settingsStatus(t("accounts.relaunchFailed", { error: errorMessage(error) }), true));
     });
   }, 1200);
 }

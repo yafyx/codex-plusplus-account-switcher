@@ -1,10 +1,12 @@
 const { errorMessage } = require("./utils");
 const { invoke } = require("./ipc");
+const { t } = require("./i18n");
 const { protectInteractiveControl } = require("./dom-utils");
 const { renderAccountsPageState } = require("./ui-settings");
 const {
   accountPanelShell,
   setPanelStatus,
+  PANEL_ROW_LEFT_INSET,
   accountDisplayName,
   accountUsageSummary,
   addButtonFeedback,
@@ -33,13 +35,13 @@ function renderAccountPanel(state, panel, accountState) {
   }
 
   const list = document.createElement("div");
-  list.style.cssText = "display:flex;flex-direction:column;min-width:0;margin-left:30px;";
+  list.style.cssText = `display:flex;flex-direction:column;min-width:0;margin-left:${PANEL_ROW_LEFT_INSET}px;`;
 
   if (accounts.length === 0) {
     const empty = document.createElement("div");
     empty.textContent = accountState.hasActiveAuth
-      ? "No saved accounts yet."
-      : "No active session. Relaunch and sign in.";
+      ? t("accounts.emptySaved")
+      : t("accounts.emptyActive");
     empty.style.cssText =
       "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0 4px;";
     list.appendChild(empty);
@@ -52,23 +54,9 @@ function renderAccountPanel(state, panel, accountState) {
   list.appendChild(configureAccountsRow(state, panel));
   const body = document.createElement("div");
   body.setAttribute("data-codexpp-account-switcher-body", "accounts");
-  body.style.cssText =
-    "display:grid;grid-template-rows:1fr;overflow:hidden;opacity:1;" +
-    `transition:grid-template-rows ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING},` +
-    `opacity ${ACCOUNTS_PANEL_TRANSITION_MS}ms ease;`;
-  if (state.accountsExpanding && !prefersReducedMotion()) {
-    body.style.gridTemplateRows = "0fr";
-    body.style.opacity = "0";
-    window.requestAnimationFrame(() => {
-      body.style.gridTemplateRows = "1fr";
-      body.style.opacity = "1";
-    });
-  }
-  if (state.accountsExpanding) {
-    state.accountsExpanding = false;
-  }
+  body.style.cssText = "overflow:hidden;opacity:1;";
   const bodyInner = document.createElement("div");
-  bodyInner.style.cssText = "min-height:0;overflow:hidden;";
+  bodyInner.style.cssText = "min-height:0;";
   bodyInner.appendChild(list);
   body.appendChild(bodyInner);
   section.appendChild(body);
@@ -79,7 +67,7 @@ function renderAccountPanel(state, panel, accountState) {
     const note = document.createElement("div");
     note.textContent = accountState.notice || accountState.error;
     note.style.cssText =
-      "padding:0 24px 6px 70px;font-size:11px;line-height:1.3;color:" +
+      `padding:0 24px 6px ${PANEL_ROW_LEFT_INSET}px;font-size:11px;line-height:1.3;color:` +
       (accountState.error
         ? "var(--color-token-text-error,#ff6b6b)"
         : "var(--color-token-text-secondary,currentColor)") +
@@ -101,7 +89,7 @@ function accountsHeaderRow(state, panel, accountState, expanded) {
   button.appendChild(cloneAccountIcon(panel, accountState));
 
   const title = document.createElement("span");
-  title.textContent = "Accounts";
+  title.textContent = t("accounts.title");
   title.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-token-text-primary,currentColor);";
   button.appendChild(title);
 
@@ -127,12 +115,10 @@ function accountsHeaderRow(state, panel, accountState, expanded) {
 function toggleAccountsExpanded(state, panel, accountState, expanded) {
   if (!expanded) {
     state.accountsExpanded = true;
-    state.accountsExpanding = true;
     renderAccountPanel(state, panel, accountState);
     return;
   }
 
-  const body = panel.querySelector("[data-codexpp-account-switcher-body='accounts']");
   const header = panel.querySelector("button[aria-expanded='true']");
   header?.setAttribute("aria-expanded", "false");
   const chevron = header?.querySelector("svg");
@@ -140,27 +126,8 @@ function toggleAccountsExpanded(state, panel, accountState, expanded) {
     chevron.style.transform = "rotate(0deg)";
   }
 
-  if (!(body instanceof HTMLElement) || prefersReducedMotion()) {
-    state.accountsExpanded = false;
-    renderAccountPanel(state, panel, accountState);
-    return;
-  }
-
-  body.style.gridTemplateRows = "1fr";
-  body.style.opacity = "1";
-  window.requestAnimationFrame(() => {
-    body.style.gridTemplateRows = "0fr";
-    body.style.opacity = "0";
-  });
-
-  window.setTimeout(() => {
-    state.accountsExpanded = false;
-    renderAccountPanel(state, panel, accountState);
-  }, ACCOUNTS_PANEL_TRANSITION_MS);
-}
-
-function prefersReducedMotion() {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  state.accountsExpanded = false;
+  renderAccountPanel(state, panel, accountState);
 }
 
 function cloneAccountIcon(panel, accountState) {
@@ -273,7 +240,7 @@ function accountRow(state, panel, accountState, name) {
   protectInteractiveControl(row);
   bindButtonAction(row, () => {
     if (accountState.current === name) return;
-    void runPanelAction(state, panel, "switch", { name }, "Switching account...");
+    void runPanelAction(state, panel, "switch", { name }, t("accounts.switching"));
   });
   return row;
 }
@@ -281,7 +248,7 @@ function accountRow(state, panel, accountState, name) {
 function configureAccountsRow(state, panel) {
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = "Configure accounts";
+  button.textContent = t("accounts.configure");
   button.style.cssText =
     "width:100%;border:0;background:transparent;color:var(--color-token-text-secondary,currentColor);" +
     "font:inherit;font-size:13px;text-align:left;border-radius:8px;margin-left:-8px;margin-right:-8px;" +
@@ -325,7 +292,7 @@ function findMenuCommand(root, pattern) {
 // ─── User-initiated actions ───────────────────────────────────────────────────
 
 function clearActiveForNewLogin(state, panel) {
-  runPanelAction(state, panel, "clear-active", {}, "Preparing sign-in...");
+  runPanelAction(state, panel, "clear-active", {}, t("accounts.preparingSignIn"));
 }
 
 async function runPanelAction(state, panel, action, payload, loadingText) {
@@ -351,24 +318,24 @@ async function runPanelAction(state, panel, action, payload, loadingText) {
 
 function authReloadMessage(action, accountState) {
   if (action === "clear-active") {
-    return "Session cleared. Relaunching Codex for sign-in...";
+    return t("accounts.sessionClearedRelaunching");
   }
   const email = accountState.current
     ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
-    : "selected account";
-  return `Switched to ${email}. Relaunching Codex...`;
+    : t("accounts.selected");
+  return t("accounts.switchedRelaunching", { email });
 }
 
 function scheduleAppRelaunch(state, panel) {
   window.setTimeout(() => {
     invoke(state, "relaunch").catch((error) => {
-      setPanelStatus(panel, `Relaunch failed: ${errorMessage(error)}`);
+      setPanelStatus(panel, t("accounts.relaunchFailed", { error: errorMessage(error) }));
     });
   }, 1200);
 }
 
 async function refreshPanel(state, panel) {
-  setPanelStatus(panel, "Loading saved accounts...");
+  setPanelStatus(panel, t("accounts.loading"));
   try {
     const accountState = await invoke(state, "state");
     renderAccountPanel(state, panel, accountState);
@@ -395,7 +362,7 @@ function refreshUsageInBackground(state, panel) {
     })
     .finally(() => {
       state.usageRefreshInFlight = false;
-    });
+  });
 }
 
 module.exports = { renderAccountPanel, accountPanelShell, refreshPanel };

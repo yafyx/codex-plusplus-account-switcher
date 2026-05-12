@@ -17,19 +17,72 @@ var require_constants = __commonJS({
 // src/utils.js
 var require_utils = __commonJS({
   "src/utils.js"(exports2, module2) {
-    function ok2(state) {
+    function ok(state) {
       return { ok: true, state };
     }
-    function fail2(error) {
+    function fail(error) {
       return { ok: false, error };
     }
-    function errorMessage2(error) {
+    function errorMessage(error) {
       return error instanceof Error ? error.message : String(error);
     }
-    function stringifyError2(error) {
+    function stringifyError(error) {
       return error instanceof Error ? error.stack || error.message : String(error);
     }
-    module2.exports = { ok: ok2, fail: fail2, errorMessage: errorMessage2, stringifyError: stringifyError2 };
+    module2.exports = { ok, fail, errorMessage, stringifyError };
+  }
+});
+
+// src/i18n.js
+var require_i18n = __commonJS({
+  "src/i18n.js"(exports2, module2) {
+    var STRINGS = {
+      "accounts.title": "Accounts",
+      "accounts.configure": "Configure accounts",
+      "accounts.emptySaved": "No saved accounts yet.",
+      "accounts.emptyActive": "No active session. Relaunch and sign in.",
+      "accounts.loading": "Loading saved accounts...",
+      "accounts.switching": "Switching account...",
+      "accounts.preparingSignIn": "Preparing sign-in...",
+      "accounts.selected": "selected account",
+      "accounts.switchedRelaunching": "Switched to {email}. Relaunching Codex...",
+      "accounts.sessionClearedRelaunching": "Session cleared. Relaunching Codex for sign-in...",
+      "accounts.relaunchFailed": "Relaunch failed: {error}",
+      "settings.activeSession": "Active session",
+      "settings.signedInAs": "Signed in as",
+      "settings.unsavedAccount": "Unsaved account",
+      "settings.noActiveSession": "No active session",
+      "settings.activeAuthDescription": "Codex is using the session stored in ~/.codex/auth.json.",
+      "settings.noAuthDescription": "No active auth file exists at ~/.codex/auth.json.",
+      "settings.accountSetup": "Account setup",
+      "settings.signInAnother": "Sign in to another account",
+      "settings.signInAnotherDescription": "Back up the current session, clear auth, and relaunch Codex for sign-in.",
+      "settings.startSignIn": "Start sign-in",
+      "settings.refreshSaved": "Refresh saved accounts",
+      "settings.refreshSavedDescription": "Rescan saved sessions in ~/.codex/auth_accounts.",
+      "settings.refresh": "Refresh",
+      "settings.savedAccounts": "Saved accounts",
+      "settings.noSavedAccounts": "No saved accounts yet",
+      "settings.noneFound": "None found",
+      "settings.noSavedAccountsDescription": "Use Sign in to another account to create one.",
+      "settings.activeInWindow": "Active in this Codex window.",
+      "settings.usageUnchecked": "Usage not checked yet.",
+      "settings.switch": "Switch",
+      "settings.delete": "Delete",
+      "settings.removing": "Removing account...",
+      "service.saved": "Saved current account as {name}.",
+      "service.switched": "Switched to {name}. Relaunching Codex.",
+      "service.removed": "Removed saved account {name}.",
+      "service.sessionCleared": "Session cleared. Relaunching Codex for sign-in.",
+      "service.relaunching": "Relaunching Codex..."
+    };
+    function t2(key, params = {}) {
+      const template = STRINGS[key] || key;
+      return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => {
+        return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match;
+      });
+    }
+    module2.exports = { t: t2 };
   }
 });
 
@@ -88,61 +141,148 @@ var require_node_utils = __commonJS({
   }
 });
 
-// src/account-service.js
-var require_account_service = __commonJS({
-  "src/account-service.js"(exports, module) {
-    var { ok, fail, errorMessage, stringifyError } = require_utils();
+// src/account/auth.js
+var require_auth = __commonJS({
+  "src/account/auth.js"(exports2, module2) {
+    function emailFromAuthString(raw) {
+      try {
+        return emailFromAuth(JSON.parse(raw));
+      } catch {
+        return null;
+      }
+    }
+    function emailFromAuth(auth) {
+      const direct = auth?.email || auth?.user?.email || auth?.account?.email;
+      if (typeof direct === "string" && direct.includes("@")) return direct;
+      const idToken = auth?.tokens?.id_token;
+      if (typeof idToken !== "string") return null;
+      const [, payload] = idToken.split(".");
+      if (!payload) return null;
+      try {
+        const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+        return typeof claims.email === "string" && claims.email.includes("@") ? claims.email : null;
+      } catch {
+        return null;
+      }
+    }
+    module2.exports = { emailFromAuthString, emailFromAuth };
+  }
+});
+
+// src/account/storage.js
+var require_storage = __commonJS({
+  "src/account/storage.js"(exports2, module2) {
     var {
-      nodeDeps,
-      codexAuthPaths,
-      normalizeAccountName,
-      accountPath,
-      ensureDir,
-      pathExists
+      nodeDeps: nodeDeps2,
+      codexAuthPaths: codexAuthPaths2,
+      accountPath: accountPath2,
+      ensureDir: ensureDir2,
+      pathExists: pathExists2
     } = require_node_utils();
-    function createAccountService(api2) {
-      return {
-        async handle(message) {
-          const action = message?.action;
-          try {
-            api2.log?.info?.(`[account-switcher] action ${String(action)}`);
-            if (action === "state") return ok(await readState());
-            if (action === "save") return ok(await saveCurrentAccount(message?.name));
-            if (action === "switch") return ok(await switchAccount(message?.name, api2));
-            if (action === "delete") return ok(await deleteAccount(message?.name));
-            if (action === "clear-active") return ok(await clearActiveAuth(api2));
-            if (action === "refresh-usage") return ok(await refreshActiveUsage(api2));
-            if (action === "relaunch") return ok(await relaunchCodex(api2));
-            return fail(`Unknown account action: ${String(action)}`);
-          } catch (error) {
-            api2.log.warn("[account-switcher] action failed", stringifyError(error));
-            return fail(errorMessage(error));
+    async function listAccountNames2() {
+      const { fsp } = nodeDeps2();
+      const { ACCOUNTS_DIR } = codexAuthPaths2();
+      if (!await pathExists2(ACCOUNTS_DIR)) return [];
+      const entries = await fsp.readdir(ACCOUNTS_DIR, { withFileTypes: true });
+      return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => entry.name.replace(/\.json$/i, "")).sort((a, b) => a.localeCompare(b, void 0, { sensitivity: "base" }));
+    }
+    async function getCurrentAccountName2(accounts) {
+      const { fsp, path } = nodeDeps2();
+      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths2();
+      if (!await pathExists2(AUTH_PATH)) return null;
+      const matched = await findMatchingAccountByContents(accounts);
+      if (matched) return matched;
+      try {
+        const raw = await fsp.readFile(CURRENT_NAME_PATH, "utf8");
+        const name = raw.trim();
+        if (name && accounts.includes(name)) return name;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      if (!await pathExists2(AUTH_PATH)) return null;
+      try {
+        const stat = await fsp.lstat(AUTH_PATH);
+        if (stat.isSymbolicLink()) {
+          const target = await fsp.readlink(AUTH_PATH);
+          const resolved = path.resolve(path.dirname(AUTH_PATH), target);
+          const relative = path.relative(path.resolve(ACCOUNTS_DIR), resolved);
+          if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+            return path.basename(resolved).replace(/\.json$/i, "");
           }
         }
-      };
+      } catch {
+      }
+      return null;
     }
-    async function readState(extra = {}) {
-      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths();
-      await ensureAutosavedActiveAccount();
-      const accounts = await listAccountNames();
-      const current = await getCurrentAccountName(accounts);
-      const hasActiveAuth = await pathExists(AUTH_PATH);
-      const accountEmails = await readAccountEmails(accounts);
-      const accountUsage = await readAccountUsage(accounts);
-      return {
-        accounts,
-        accountEmails,
-        accountUsage,
-        current,
-        hasActiveAuth,
-        paths: {
-          auth: AUTH_PATH,
-          accountsDir: ACCOUNTS_DIR,
-          current: CURRENT_NAME_PATH
-        },
-        ...extra
-      };
+    async function findMatchingAccountByContents(accounts) {
+      const { fsp } = nodeDeps2();
+      const { AUTH_PATH } = codexAuthPaths2();
+      let active;
+      try {
+        active = await fsp.readFile(AUTH_PATH, "utf8");
+      } catch {
+        return null;
+      }
+      for (const name of accounts) {
+        try {
+          const saved = await fsp.readFile(accountPath2(name), "utf8");
+          if (saved === active) return name;
+        } catch {
+        }
+      }
+      return null;
     }
+    async function accountContentsMatchActive(contents) {
+      const { fsp } = nodeDeps2();
+      const { AUTH_PATH } = codexAuthPaths2();
+      try {
+        return await fsp.readFile(AUTH_PATH, "utf8") === contents;
+      } catch {
+        return false;
+      }
+    }
+    async function ensureAutosavedActiveAccount() {
+      const { fsp } = nodeDeps2();
+      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths2();
+      if (!await pathExists2(AUTH_PATH)) return null;
+      const accounts = await listAccountNames2();
+      const matched = await findMatchingAccountByContents(accounts);
+      if (matched) {
+        await fsp.writeFile(CURRENT_NAME_PATH, `${matched}
+`, "utf8");
+        return matched;
+      }
+      await ensureDir2(ACCOUNTS_DIR);
+      const name = await nextAvailableAccountName("account");
+      await fsp.copyFile(AUTH_PATH, accountPath2(name));
+      await fsp.writeFile(CURRENT_NAME_PATH, `${name}
+`, "utf8");
+      return name;
+    }
+    async function nextAvailableAccountName(baseName) {
+      const accounts = new Set(await listAccountNames2());
+      if (!accounts.has(baseName)) return baseName;
+      for (let index = 2; index < 1e4; index += 1) {
+        const name = `${baseName}-${index}`;
+        if (!accounts.has(name)) return name;
+      }
+      throw new Error("Could not find an available account name.");
+    }
+    module2.exports = {
+      listAccountNames: listAccountNames2,
+      getCurrentAccountName: getCurrentAccountName2,
+      findMatchingAccountByContents,
+      accountContentsMatchActive,
+      ensureAutosavedActiveAccount,
+      nextAvailableAccountName
+    };
+  }
+});
+
+// src/account/usage.js
+var require_usage = __commonJS({
+  "src/account/usage.js"(exports, module) {
+    var { nodeDeps, codexAuthPaths, ensureDir } = require_node_utils();
     async function readAccountUsage(accounts) {
       const { fsp } = nodeDeps();
       const { USAGE_CACHE_PATH } = codexAuthPaths();
@@ -195,109 +335,6 @@ var require_account_service = __commonJS({
         pct: Math.max(0, Math.min(100, Math.round(pct))),
         resetAt: typeof window2.resetAt === "string" && window2.resetAt ? window2.resetAt : null
       };
-    }
-    async function readAccountEmails(accounts) {
-      const entries = await Promise.all(
-        accounts.map(async (name) => [name, await readAccountEmail(accountPath(name))])
-      );
-      return Object.fromEntries(entries.filter(([, email]) => email));
-    }
-    async function readAccountEmail(filePath) {
-      const { fsp } = nodeDeps();
-      try {
-        const auth = JSON.parse(await fsp.readFile(filePath, "utf8"));
-        return emailFromAuth(auth);
-      } catch {
-        return null;
-      }
-    }
-    function emailFromAuth(auth) {
-      const direct = auth?.email || auth?.user?.email || auth?.account?.email;
-      if (typeof direct === "string" && direct.includes("@")) return direct;
-      const idToken = auth?.tokens?.id_token;
-      if (typeof idToken !== "string") return null;
-      const [, payload] = idToken.split(".");
-      if (!payload) return null;
-      try {
-        const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-        return typeof claims.email === "string" && claims.email.includes("@") ? claims.email : null;
-      } catch {
-        return null;
-      }
-    }
-    async function listAccountNames() {
-      const { fsp } = nodeDeps();
-      const { ACCOUNTS_DIR } = codexAuthPaths();
-      if (!await pathExists(ACCOUNTS_DIR)) return [];
-      const entries = await fsp.readdir(ACCOUNTS_DIR, { withFileTypes: true });
-      return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => entry.name.replace(/\.json$/i, "")).sort((a, b) => a.localeCompare(b, void 0, { sensitivity: "base" }));
-    }
-    async function getCurrentAccountName(accounts) {
-      const { fsp, path } = nodeDeps();
-      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths();
-      if (!await pathExists(AUTH_PATH)) return null;
-      const matched = await findMatchingAccountByContents(accounts);
-      if (matched) return matched;
-      try {
-        const raw = await fsp.readFile(CURRENT_NAME_PATH, "utf8");
-        const name = raw.trim();
-        if (name && accounts.includes(name)) return name;
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
-      if (!await pathExists(AUTH_PATH)) return null;
-      try {
-        const stat = await fsp.lstat(AUTH_PATH);
-        if (stat.isSymbolicLink()) {
-          const target = await fsp.readlink(AUTH_PATH);
-          const resolved = path.resolve(path.dirname(AUTH_PATH), target);
-          const relative = path.relative(path.resolve(ACCOUNTS_DIR), resolved);
-          if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
-            return path.basename(resolved).replace(/\.json$/i, "");
-          }
-        }
-      } catch {
-      }
-      return null;
-    }
-    async function findMatchingAccountByContents(accounts) {
-      const { fsp } = nodeDeps();
-      const { AUTH_PATH } = codexAuthPaths();
-      let active;
-      try {
-        active = await fsp.readFile(AUTH_PATH, "utf8");
-      } catch {
-        return null;
-      }
-      for (const name of accounts) {
-        try {
-          const saved = await fsp.readFile(accountPath(name), "utf8");
-          if (saved === active) return name;
-        } catch {
-        }
-      }
-      return null;
-    }
-    async function saveCurrentAccount(rawName) {
-      const { fsp } = nodeDeps();
-      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths();
-      const name = normalizeAccountName(rawName);
-      if (!await pathExists(AUTH_PATH)) {
-        throw new Error(`No active Codex auth file found at ${AUTH_PATH}`);
-      }
-      await ensureDir(ACCOUNTS_DIR);
-      await fsp.copyFile(AUTH_PATH, accountPath(name));
-      await fsp.writeFile(CURRENT_NAME_PATH, `${name}
-`, "utf8");
-      return readState({ notice: `Saved current account as ${name}.` });
-    }
-    async function refreshActiveUsage(api2) {
-      const accounts = await listAccountNames();
-      const current = await getCurrentAccountName(accounts);
-      if (!current) return readState();
-      const snapshot = await fetchActiveUsageSnapshot(api2);
-      await writeAccountUsage(current, snapshot);
-      return readState();
     }
     async function fetchActiveUsageSnapshot(api2) {
       if (typeof api2?.fetchActiveUsage === "function") {
@@ -429,32 +466,126 @@ var require_account_service = __commonJS({
         minute: "2-digit"
       });
     }
-    async function ensureAutosavedActiveAccount() {
+    module.exports = {
+      readAccountUsage,
+      writeAccountUsage,
+      normalizeUsageSnapshot,
+      normalizeUsageWindow,
+      fetchActiveUsageSnapshot,
+      snapshotFromUsagePayload
+    };
+  }
+});
+
+// src/account/state.js
+var require_state = __commonJS({
+  "src/account/state.js"(exports2, module2) {
+    var { nodeDeps: nodeDeps2, codexAuthPaths: codexAuthPaths2, accountPath: accountPath2, pathExists: pathExists2 } = require_node_utils();
+    var { emailFromAuthString } = require_auth();
+    var {
+      accountContentsMatchActive,
+      ensureAutosavedActiveAccount,
+      getCurrentAccountName: getCurrentAccountName2,
+      listAccountNames: listAccountNames2
+    } = require_storage();
+    var { readAccountUsage: readAccountUsage2 } = require_usage();
+    async function readState2(extra = {}) {
+      const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths2();
+      await ensureAutosavedActiveAccount();
+      const allAccounts = await listAccountNames2();
+      const visibleAccounts = await selectVisibleAccounts(allAccounts);
+      const accounts = visibleAccounts.map((account) => account.name);
+      const current = await getCurrentAccountName2(accounts);
+      const hasActiveAuth = await pathExists2(AUTH_PATH);
+      const accountEmails = Object.fromEntries(
+        visibleAccounts.map(({ name, email }) => [name, email]).filter(([, email]) => email)
+      );
+      const accountUsage = await readAccountUsage2(accounts);
+      return {
+        accounts,
+        accountEmails,
+        accountUsage,
+        current,
+        hasActiveAuth,
+        paths: {
+          auth: AUTH_PATH,
+          accountsDir: ACCOUNTS_DIR,
+          current: CURRENT_NAME_PATH
+        },
+        ...extra
+      };
+    }
+    async function selectVisibleAccounts(accounts) {
+      const details = await Promise.all(accounts.map(readAccountDetails));
+      const byIdentity = /* @__PURE__ */ new Map();
+      for (const detail of details) {
+        const key = detail.email ? `email:${detail.email.toLowerCase()}` : `name:${detail.name}`;
+        const existing = byIdentity.get(key);
+        if (!existing || compareAccountPreference(detail, existing) < 0) {
+          byIdentity.set(key, detail);
+        }
+      }
+      return Array.from(byIdentity.values()).sort(
+        (a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" })
+      );
+    }
+    async function readAccountDetails(name) {
+      const { fsp } = nodeDeps2();
+      let raw = null;
+      let mtimeMs = 0;
+      try {
+        const filePath = accountPath2(name);
+        const [contents, stat] = await Promise.all([
+          fsp.readFile(filePath, "utf8"),
+          fsp.stat(filePath)
+        ]);
+        raw = contents;
+        mtimeMs = stat.mtimeMs;
+      } catch {
+      }
+      return {
+        name,
+        email: raw ? emailFromAuthString(raw) : null,
+        isActive: raw ? await accountContentsMatchActive(raw) : false,
+        mtimeMs
+      };
+    }
+    function compareAccountPreference(left, right) {
+      if (left.isActive !== right.isActive) return left.isActive ? -1 : 1;
+      if (left.mtimeMs !== right.mtimeMs) return right.mtimeMs - left.mtimeMs;
+      return left.name.localeCompare(right.name, void 0, { sensitivity: "base" });
+    }
+    module2.exports = { readState: readState2, selectVisibleAccounts };
+  }
+});
+
+// src/account/actions.js
+var require_actions = __commonJS({
+  "src/account/actions.js"(exports, module) {
+    var { t } = require_i18n();
+    var {
+      nodeDeps,
+      codexAuthPaths,
+      normalizeAccountName,
+      accountPath,
+      ensureDir,
+      pathExists
+    } = require_node_utils();
+    var { readState } = require_state();
+    var { getCurrentAccountName, listAccountNames } = require_storage();
+    var { fetchActiveUsageSnapshot, writeAccountUsage } = require_usage();
+    async function saveCurrentAccount(rawName) {
       const { fsp } = nodeDeps();
       const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths();
-      if (!await pathExists(AUTH_PATH)) return null;
-      const accounts = await listAccountNames();
-      const matched = await findMatchingAccountByContents(accounts);
-      if (matched) {
-        await fsp.writeFile(CURRENT_NAME_PATH, `${matched}
-`, "utf8");
-        return matched;
+      const name = normalizeAccountName(rawName);
+      if (!await pathExists(AUTH_PATH)) {
+        throw new Error(`No active Codex auth file found at ${AUTH_PATH}`);
       }
       await ensureDir(ACCOUNTS_DIR);
-      const name = await nextAvailableAccountName("account");
       await fsp.copyFile(AUTH_PATH, accountPath(name));
       await fsp.writeFile(CURRENT_NAME_PATH, `${name}
 `, "utf8");
-      return name;
-    }
-    async function nextAvailableAccountName(baseName) {
-      const accounts = new Set(await listAccountNames());
-      if (!accounts.has(baseName)) return baseName;
-      for (let index = 2; index < 1e4; index += 1) {
-        const name = `${baseName}-${index}`;
-        if (!accounts.has(name)) return name;
-      }
-      throw new Error("Could not find an available account name.");
+      return readState({ notice: t("service.saved", { name }) });
     }
     async function switchAccount(rawName, api2) {
       const { fsp } = nodeDeps();
@@ -468,7 +599,7 @@ var require_account_service = __commonJS({
 `, "utf8");
       api2?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
       return readState({
-        notice: `Switched to ${name}. Relaunching Codex.`,
+        notice: t("service.switched", { name }),
         requiresAppRelaunch: true
       });
     }
@@ -485,7 +616,7 @@ var require_account_service = __commonJS({
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
       }
-      return readState({ notice: `Removed saved account ${name}.` });
+      return readState({ notice: t("service.removed", { name }) });
     }
     async function clearActiveAuth(api2) {
       const { fsp, path } = nodeDeps();
@@ -499,9 +630,17 @@ var require_account_service = __commonJS({
       await fsp.rm(CURRENT_NAME_PATH, { force: true });
       api2?.log?.info?.("[account-switcher] cleared active auth file; app relaunch required");
       return readState({
-        notice: "Session cleared. Relaunching Codex for sign-in.",
+        notice: t("service.sessionCleared"),
         requiresAppRelaunch: true
       });
+    }
+    async function refreshActiveUsage(api2) {
+      const accounts = await listAccountNames();
+      const current = await getCurrentAccountName(accounts);
+      if (!current) return readState();
+      const snapshot = await fetchActiveUsageSnapshot(api2);
+      await writeAccountUsage(current, snapshot);
+      return readState();
     }
     async function relaunchCodex(api) {
       api?.log?.info?.("[account-switcher] relaunch requested");
@@ -511,9 +650,54 @@ var require_account_service = __commonJS({
         app.relaunch();
         app.exit(0);
       }, 100);
-      return readState({ notice: "Relaunching Codex..." });
+      return readState({ notice: t("service.relaunching") });
     }
-    module.exports = { createAccountService };
+    module.exports = {
+      saveCurrentAccount,
+      switchAccount,
+      deleteAccount,
+      clearActiveAuth,
+      refreshActiveUsage,
+      relaunchCodex
+    };
+  }
+});
+
+// src/account/service.js
+var require_service = __commonJS({
+  "src/account/service.js"(exports2, module2) {
+    var { ok, fail, errorMessage, stringifyError } = require_utils();
+    var {
+      clearActiveAuth: clearActiveAuth2,
+      deleteAccount: deleteAccount2,
+      refreshActiveUsage: refreshActiveUsage2,
+      relaunchCodex: relaunchCodex2,
+      saveCurrentAccount: saveCurrentAccount2,
+      switchAccount: switchAccount2
+    } = require_actions();
+    var { readState: readState2 } = require_state();
+    function createAccountService2(api2) {
+      return {
+        async handle(message) {
+          const action = message?.action;
+          try {
+            api2.log?.info?.(`[account-switcher] action ${String(action)}`);
+            if (action === "state") return ok(await readState2());
+            if (action === "save") return ok(await saveCurrentAccount2(message?.name));
+            if (action === "switch") return ok(await switchAccount2(message?.name, api2));
+            if (action === "delete") return ok(await deleteAccount2(message?.name));
+            if (action === "clear-active") return ok(await clearActiveAuth2(api2));
+            if (action === "refresh-usage") return ok(await refreshActiveUsage2(api2));
+            if (action === "relaunch") return ok(await relaunchCodex2(api2));
+            return fail(`Unknown account action: ${String(action)}`);
+          } catch (error) {
+            api2.log.warn("[account-switcher] action failed", stringifyError(error));
+            return fail(errorMessage(error));
+          }
+        }
+      };
+    }
+    module2.exports = { createAccountService: createAccountService2 };
   }
 });
 
@@ -577,6 +761,7 @@ var require_ipc = __commonJS({
 var require_ui_components = __commonJS({
   "src/ui-components.js"(exports2, module2) {
     var { protectInteractiveControl } = require_dom_utils();
+    var PANEL_ROW_LEFT_INSET = 30;
     function addButtonFeedback(element, styles) {
       const normal = {
         background: element.style.background || element.style.backgroundColor || "transparent",
@@ -774,7 +959,7 @@ var require_ui_components = __commonJS({
       panel.textContent = "";
       const status = document.createElement("div");
       status.textContent = text;
-      status.style.cssText = "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0;";
+      status.style.cssText = `font-size:12px;line-height:1.35;color:var(--color-token-text-secondary,currentColor);padding:4px 24px 6px ${PANEL_ROW_LEFT_INSET}px;`;
       panel.appendChild(status);
     }
     function accountDisplayName(accountState, name, options = {}) {
@@ -791,8 +976,7 @@ var require_ui_components = __commonJS({
       if (fiveHour) parts.push(fiveHour);
       if (weekly) parts.push(weekly);
       if (!parts.length) return null;
-      const age = usageAgeLabel(usage.at);
-      return age ? `${parts.join(" \xB7 ")} \xB7 ${age}` : parts.join(" \xB7 ");
+      return parts.join(" \xB7 ");
     }
     function usageWindowSummary(window2, fallbackLabel) {
       if (typeof window2?.pct !== "number") return null;
@@ -800,20 +984,8 @@ var require_ui_components = __commonJS({
       const reset = window2.pct <= 0 && window2.resetAt ? `, resets ${window2.resetAt}` : "";
       return `${label} ${window2.pct}%${reset}`;
     }
-    function usageAgeLabel(at) {
-      const time = Number(at);
-      if (!Number.isFinite(time)) return null;
-      const ageMs = Date.now() - time;
-      if (!Number.isFinite(ageMs) || ageMs < 0) return "just now";
-      const minutes = Math.floor(ageMs / 6e4);
-      if (minutes < 1) return "just now";
-      if (minutes < 60) return `${minutes}m ago`;
-      const hours = Math.floor(minutes / 60);
-      if (hours < 24) return `${hours}h ago`;
-      const days = Math.floor(hours / 24);
-      return `${days}d ago`;
-    }
     module2.exports = {
+      PANEL_ROW_LEFT_INSET,
       addButtonFeedback,
       smallButton,
       iconButton,
@@ -836,8 +1008,9 @@ var require_ui_components = __commonJS({
 // src/ui-settings.js
 var require_ui_settings = __commonJS({
   "src/ui-settings.js"(exports2, module2) {
-    var { errorMessage: errorMessage2 } = require_utils();
+    var { errorMessage } = require_utils();
     var { invoke } = require_ipc();
+    var { t: t2 } = require_i18n();
     var {
       settingsButton,
       settingsSection,
@@ -852,60 +1025,60 @@ var require_ui_settings = __commonJS({
     } = require_ui_components();
     async function renderAccountsPage(state, root) {
       root.textContent = "";
-      root.appendChild(settingsStatus("Loading saved accounts..."));
+      root.appendChild(settingsStatus(t2("accounts.loading")));
       try {
         const accountState = await invoke(state, "state");
         renderAccountsPageState(state, root, accountState);
         refreshUsageInBackground(state, root);
       } catch (error) {
         root.textContent = "";
-        root.appendChild(settingsStatus(errorMessage2(error), true));
+        root.appendChild(settingsStatus(errorMessage(error), true));
       }
     }
     function renderAccountsPageState(state, root, accountState) {
       root.textContent = "";
-      const intro = settingsSection("Active session");
+      const intro = settingsSection(t2("settings.activeSession"));
       const introCard = settingsCard();
-      const currentName = accountState.current || (accountState.hasActiveAuth ? "Unsaved account" : "No active session");
+      const currentName = accountState.current || (accountState.hasActiveAuth ? t2("settings.unsavedAccount") : t2("settings.noActiveSession"));
       const currentValue = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : currentName;
       introCard.appendChild(
         settingsInfoRow(
-          "Signed in as",
+          t2("settings.signedInAs"),
           currentValue,
-          accountState.hasActiveAuth ? "Codex is using the session stored in ~/.codex/auth.json." : "No active auth file exists at ~/.codex/auth.json."
+          accountState.hasActiveAuth ? t2("settings.activeAuthDescription") : t2("settings.noAuthDescription")
         )
       );
       intro.appendChild(introCard);
       root.appendChild(intro);
-      const actions = settingsSection("Account setup");
+      const actions = settingsSection(t2("settings.accountSetup"));
       const actionCard = settingsCard();
       actionCard.appendChild(
         settingsActionRow(
-          "Sign in to another account",
-          "Back up the current session, clear auth, and relaunch Codex for sign-in.",
-          "Start sign-in",
+          t2("settings.signInAnother"),
+          t2("settings.signInAnotherDescription"),
+          t2("settings.startSignIn"),
           () => clearActiveFromSettings(state, root)
         )
       );
       actionCard.appendChild(
         settingsActionRow(
-          "Refresh saved accounts",
-          "Rescan saved sessions in ~/.codex/auth_accounts.",
-          "Refresh",
+          t2("settings.refreshSaved"),
+          t2("settings.refreshSavedDescription"),
+          t2("settings.refresh"),
           () => renderAccountsPage(state, root)
         )
       );
       actions.appendChild(actionCard);
       root.appendChild(actions);
-      const saved = settingsSection("Saved accounts");
+      const saved = settingsSection(t2("settings.savedAccounts"));
       const savedCard = settingsCard();
       const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
       if (!accounts.length) {
         savedCard.appendChild(
           settingsInfoRow(
-            "No saved accounts yet",
-            "None found",
-            "Use Sign in to another account to create one."
+            t2("settings.noSavedAccounts"),
+            t2("settings.noneFound"),
+            t2("settings.noSavedAccountsDescription")
           )
         );
       } else {
@@ -930,28 +1103,28 @@ var require_ui_settings = __commonJS({
       left.appendChild(title);
       const desc = document.createElement("div");
       desc.className = "text-token-text-secondary min-w-0 text-sm";
-      desc.textContent = accountUsageSummary(accountState, name) || (accountState.current === name ? "Active in this Codex window." : "Usage not checked yet.");
+      desc.textContent = accountUsageSummary(accountState, name) || (accountState.current === name ? t2("settings.activeInWindow") : t2("settings.usageUnchecked"));
       left.appendChild(desc);
       row.appendChild(left);
       const actionsEl = document.createElement("div");
       actionsEl.className = "flex shrink-0 items-center gap-2";
-      const switchButton = settingsButton("Switch");
+      const switchButton = settingsButton(t2("settings.switch"));
       switchButton.disabled = accountState.current === name;
       bindButtonAction(
         switchButton,
-        () => runSettingsAction(state, root, "switch", { name }, "Switching account...")
+        () => runSettingsAction(state, root, "switch", { name }, t2("accounts.switching"))
       );
       actionsEl.appendChild(switchButton);
-      const removeButton = settingsButton("Delete");
+      const removeButton = settingsButton(t2("settings.delete"));
       bindButtonAction(removeButton, () => {
-        runSettingsAction(state, root, "delete", { name }, "Removing account...");
+        runSettingsAction(state, root, "delete", { name }, t2("settings.removing"));
       });
       actionsEl.appendChild(removeButton);
       row.appendChild(actionsEl);
       return row;
     }
     function clearActiveFromSettings(state, root) {
-      runSettingsAction(state, root, "clear-active", {}, "Preparing sign-in...");
+      runSettingsAction(state, root, "clear-active", {}, t2("accounts.preparingSignIn"));
     }
     function refreshUsageInBackground(state, root) {
       const now = Date.now();
@@ -961,7 +1134,7 @@ var require_ui_settings = __commonJS({
       invoke(state, "refresh-usage").then((accountState) => {
         if (root.isConnected) renderAccountsPageState(state, root, accountState);
       }).catch((error) => {
-        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage2(error));
+        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
       }).finally(() => {
         state.usageRefreshInFlight = false;
       });
@@ -981,22 +1154,22 @@ var require_ui_settings = __commonJS({
       } catch (error) {
         renderAccountsPageState(state, root, {
           ...state.lastState || { accounts: [], current: null, hasActiveAuth: false },
-          error: errorMessage2(error)
+          error: errorMessage(error)
         });
       }
     }
     function authReloadMessage(action, accountState) {
       if (action === "clear-active") {
-        return "Session cleared. Relaunching Codex for sign-in...";
+        return t2("accounts.sessionClearedRelaunching");
       }
-      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : "selected account";
-      return `Switched to ${email}. Relaunching Codex...`;
+      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : t2("accounts.selected");
+      return t2("accounts.switchedRelaunching", { email });
     }
     function scheduleAppRelaunch(state, root) {
       window.setTimeout(() => {
         invoke(state, "relaunch").catch((error) => {
           root.textContent = "";
-          root.appendChild(settingsStatus(`Relaunch failed: ${errorMessage2(error)}`, true));
+          root.appendChild(settingsStatus(t2("accounts.relaunchFailed", { error: errorMessage(error) }), true));
         });
       }, 1200);
     }
@@ -1010,13 +1183,15 @@ var require_ui_settings = __commonJS({
 // src/ui-popup.js
 var require_ui_popup = __commonJS({
   "src/ui-popup.js"(exports2, module2) {
-    var { errorMessage: errorMessage2 } = require_utils();
+    var { errorMessage } = require_utils();
     var { invoke } = require_ipc();
+    var { t: t2 } = require_i18n();
     var { protectInteractiveControl } = require_dom_utils();
     var { renderAccountsPageState } = require_ui_settings();
     var {
       accountPanelShell,
       setPanelStatus,
+      PANEL_ROW_LEFT_INSET,
       accountDisplayName,
       accountUsageSummary,
       addButtonFeedback,
@@ -1037,10 +1212,10 @@ var require_ui_popup = __commonJS({
         return;
       }
       const list = document.createElement("div");
-      list.style.cssText = "display:flex;flex-direction:column;min-width:0;margin-left:30px;";
+      list.style.cssText = `display:flex;flex-direction:column;min-width:0;margin-left:${PANEL_ROW_LEFT_INSET}px;`;
       if (accounts.length === 0) {
         const empty = document.createElement("div");
-        empty.textContent = accountState.hasActiveAuth ? "No saved accounts yet." : "No active session. Relaunch and sign in.";
+        empty.textContent = accountState.hasActiveAuth ? t2("accounts.emptySaved") : t2("accounts.emptyActive");
         empty.style.cssText = "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px 0 4px;";
         list.appendChild(empty);
       }
@@ -1050,20 +1225,9 @@ var require_ui_popup = __commonJS({
       list.appendChild(configureAccountsRow(state, panel));
       const body = document.createElement("div");
       body.setAttribute("data-codexpp-account-switcher-body", "accounts");
-      body.style.cssText = `display:grid;grid-template-rows:1fr;overflow:hidden;opacity:1;transition:grid-template-rows ${ACCOUNTS_PANEL_TRANSITION_MS}ms ${ACCOUNTS_PANEL_EASING},opacity ${ACCOUNTS_PANEL_TRANSITION_MS}ms ease;`;
-      if (state.accountsExpanding && !prefersReducedMotion()) {
-        body.style.gridTemplateRows = "0fr";
-        body.style.opacity = "0";
-        window.requestAnimationFrame(() => {
-          body.style.gridTemplateRows = "1fr";
-          body.style.opacity = "1";
-        });
-      }
-      if (state.accountsExpanding) {
-        state.accountsExpanding = false;
-      }
+      body.style.cssText = "overflow:hidden;opacity:1;";
       const bodyInner = document.createElement("div");
-      bodyInner.style.cssText = "min-height:0;overflow:hidden;";
+      bodyInner.style.cssText = "min-height:0;";
       bodyInner.appendChild(list);
       body.appendChild(bodyInner);
       section.appendChild(body);
@@ -1071,7 +1235,7 @@ var require_ui_popup = __commonJS({
       if (accountState.notice || accountState.error) {
         const note = document.createElement("div");
         note.textContent = accountState.notice || accountState.error;
-        note.style.cssText = "padding:0 24px 6px 70px;font-size:11px;line-height:1.3;color:" + (accountState.error ? "var(--color-token-text-error,#ff6b6b)" : "var(--color-token-text-secondary,currentColor)") + ";";
+        note.style.cssText = `padding:0 24px 6px ${PANEL_ROW_LEFT_INSET}px;font-size:11px;line-height:1.3;color:` + (accountState.error ? "var(--color-token-text-error,#ff6b6b)" : "var(--color-token-text-secondary,currentColor)") + ";";
         panel.appendChild(note);
       }
     }
@@ -1082,7 +1246,7 @@ var require_ui_popup = __commonJS({
       button.style.cssText = "width:100%;border:0;background:transparent;color:var(--color-token-text-tertiary,currentColor);font:inherit;font-size:14px;text-align:left;border-radius:8px;padding:2px 0;cursor:pointer;display:grid;grid-template-columns:26px minmax(0,1fr) 20px;column-gap:4px;align-items:center;";
       button.appendChild(cloneAccountIcon(panel, accountState));
       const title = document.createElement("span");
-      title.textContent = "Accounts";
+      title.textContent = t2("accounts.title");
       title.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-token-text-primary,currentColor);";
       button.appendChild(title);
       const chevronSlot = document.createElement("span");
@@ -1104,35 +1268,17 @@ var require_ui_popup = __commonJS({
     function toggleAccountsExpanded(state, panel, accountState, expanded) {
       if (!expanded) {
         state.accountsExpanded = true;
-        state.accountsExpanding = true;
         renderAccountPanel(state, panel, accountState);
         return;
       }
-      const body = panel.querySelector("[data-codexpp-account-switcher-body='accounts']");
       const header = panel.querySelector("button[aria-expanded='true']");
       header?.setAttribute("aria-expanded", "false");
       const chevron = header?.querySelector("svg");
       if (chevron instanceof SVGElement) {
         chevron.style.transform = "rotate(0deg)";
       }
-      if (!(body instanceof HTMLElement) || prefersReducedMotion()) {
-        state.accountsExpanded = false;
-        renderAccountPanel(state, panel, accountState);
-        return;
-      }
-      body.style.gridTemplateRows = "1fr";
-      body.style.opacity = "1";
-      window.requestAnimationFrame(() => {
-        body.style.gridTemplateRows = "0fr";
-        body.style.opacity = "0";
-      });
-      window.setTimeout(() => {
-        state.accountsExpanded = false;
-        renderAccountPanel(state, panel, accountState);
-      }, ACCOUNTS_PANEL_TRANSITION_MS);
-    }
-    function prefersReducedMotion() {
-      return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+      state.accountsExpanded = false;
+      renderAccountPanel(state, panel, accountState);
     }
     function cloneAccountIcon(panel, accountState) {
       const icon = findAccountMenuIcon(panel, accountState);
@@ -1214,14 +1360,14 @@ var require_ui_popup = __commonJS({
       protectInteractiveControl(row);
       bindButtonAction(row, () => {
         if (accountState.current === name) return;
-        void runPanelAction(state, panel, "switch", { name }, "Switching account...");
+        void runPanelAction(state, panel, "switch", { name }, t2("accounts.switching"));
       });
       return row;
     }
     function configureAccountsRow(state, panel) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = "Configure accounts";
+      button.textContent = t2("accounts.configure");
       button.style.cssText = "width:100%;border:0;background:transparent;color:var(--color-token-text-secondary,currentColor);font:inherit;font-size:13px;text-align:left;border-radius:8px;margin-left:-8px;margin-right:-8px;padding:5px 8px;cursor:pointer;";
       addButtonFeedback(button, {
         normal: { background: "transparent" },
@@ -1270,32 +1416,32 @@ var require_ui_popup = __commonJS({
       } catch (error) {
         renderAccountPanel(state, panel, {
           ...state.lastState || { accounts: [], current: null, hasActiveAuth: false },
-          error: errorMessage2(error)
+          error: errorMessage(error)
         });
       }
     }
     function authReloadMessage(action, accountState) {
       if (action === "clear-active") {
-        return "Session cleared. Relaunching Codex for sign-in...";
+        return t2("accounts.sessionClearedRelaunching");
       }
-      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : "selected account";
-      return `Switched to ${email}. Relaunching Codex...`;
+      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : t2("accounts.selected");
+      return t2("accounts.switchedRelaunching", { email });
     }
     function scheduleAppRelaunch(state, panel) {
       window.setTimeout(() => {
         invoke(state, "relaunch").catch((error) => {
-          setPanelStatus(panel, `Relaunch failed: ${errorMessage2(error)}`);
+          setPanelStatus(panel, t2("accounts.relaunchFailed", { error: errorMessage(error) }));
         });
       }, 1200);
     }
     async function refreshPanel(state, panel) {
-      setPanelStatus(panel, "Loading saved accounts...");
+      setPanelStatus(panel, t2("accounts.loading"));
       try {
         const accountState = await invoke(state, "state");
         renderAccountPanel(state, panel, accountState);
         refreshUsageInBackground(state, panel);
       } catch (error) {
-        setPanelStatus(panel, errorMessage2(error));
+        setPanelStatus(panel, errorMessage(error));
       }
     }
     function refreshUsageInBackground(state, panel) {
@@ -1309,7 +1455,7 @@ var require_ui_popup = __commonJS({
           renderAccountsPageState(state, state.settingsRoot, accountState);
         }
       }).catch((error) => {
-        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage2(error));
+        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
       }).finally(() => {
         state.usageRefreshInFlight = false;
       });
@@ -1439,7 +1585,7 @@ var require_renderer = __commonJS({
 
 // index.js
 var { GLOBAL_SERVICE_KEY, IPC_HANDLER_KEY, IPC_CHANNEL } = require_constants();
-var { createAccountService: createAccountService2 } = require_account_service();
+var { createAccountService } = require_service();
 var { startRenderer } = require_renderer();
 module.exports = {
   start(api2) {
@@ -1481,7 +1627,7 @@ module.exports = {
   }
 };
 function startMain(api2) {
-  const service = createAccountService2(api2);
+  const service = createAccountService(api2);
   globalThis[GLOBAL_SERVICE_KEY] = service;
   if (!globalThis[IPC_HANDLER_KEY]) {
     api2.ipc.handle(IPC_CHANNEL, async (message) => {

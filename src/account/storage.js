@@ -5,6 +5,7 @@ const {
   ensureDir,
   pathExists,
 } = require("../node-utils");
+const { emailFromAuthString } = require("./auth");
 
 async function listAccountNames() {
   const { fsp } = nodeDeps();
@@ -93,11 +94,56 @@ async function ensureAutosavedActiveAccount() {
     return matched;
   }
 
+  const active = await fsp.readFile(AUTH_PATH, "utf8");
+  const sameEmail = await findMatchingAccountByEmail(accounts, active);
+  if (sameEmail) {
+    await fsp.copyFile(AUTH_PATH, accountPath(sameEmail));
+    await fsp.writeFile(CURRENT_NAME_PATH, `${sameEmail}\n`, "utf8");
+    return sameEmail;
+  }
+
   await ensureDir(ACCOUNTS_DIR);
   const name = await nextAvailableAccountName("account");
   await fsp.copyFile(AUTH_PATH, accountPath(name));
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
   return name;
+}
+
+async function findMatchingAccountByEmail(accounts, activeContents) {
+  const activeEmail = emailFromAuthString(activeContents)?.toLowerCase();
+  if (!activeEmail) return null;
+
+  const { fsp } = nodeDeps();
+  const { CURRENT_NAME_PATH } = codexAuthPaths();
+  let current = null;
+  try {
+    current = (await fsp.readFile(CURRENT_NAME_PATH, "utf8")).trim();
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const matches = [];
+  for (const name of accounts) {
+    try {
+      const filePath = accountPath(name);
+      const [contents, stat] = await Promise.all([
+        fsp.readFile(filePath, "utf8"),
+        fsp.stat(filePath),
+      ]);
+      if (emailFromAuthString(contents)?.toLowerCase() === activeEmail) {
+        matches.push({ name, isCurrent: name === current, mtimeMs: stat.mtimeMs });
+      }
+    } catch {
+      /* ignore unreadable snapshots */
+    }
+  }
+
+  matches.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+  return matches[0]?.name || null;
 }
 
 async function nextAvailableAccountName(baseName) {
@@ -114,6 +160,7 @@ module.exports = {
   listAccountNames,
   getCurrentAccountName,
   findMatchingAccountByContents,
+  findMatchingAccountByEmail,
   accountContentsMatchActive,
   ensureAutosavedActiveAccount,
   nextAvailableAccountName,

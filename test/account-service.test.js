@@ -173,6 +173,29 @@ test("state hides duplicate email accounts and keeps the active match", async ()
   });
 });
 
+test("state refreshes matching saved email instead of creating generic autosave", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+
+    const oldAuth = authWithEmail("work@example.com", { profile_id: "old-token" });
+    const refreshedAuth = authWithEmail("work@example.com", { profile_id: "refreshed-token" });
+    await fs.writeFile(path.join(accountsDir, "work.json"), oldAuth);
+    await fs.writeFile(path.join(codexDir, "auth.json"), refreshedAuth);
+
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService({ log: { warn() {} } });
+    const result = await service.handle({ action: "state" });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.state.accounts, ["work"]);
+    assert.equal(result.state.current, "work");
+    assert.equal(await fs.readFile(path.join(accountsDir, "work.json"), "utf8"), refreshedAuth);
+    await assert.rejects(fs.stat(path.join(accountsDir, "account.json")), { code: "ENOENT" });
+  });
+});
+
 test("state hides duplicate email accounts and keeps newest when none is active", async () => {
   await withTempHome(async (home) => {
     const codexDir = path.join(home, ".codex");

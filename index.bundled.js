@@ -179,6 +179,7 @@ var require_storage = __commonJS({
       ensureDir: ensureDir2,
       pathExists: pathExists2
     } = require_node_utils();
+    var { emailFromAuthString } = require_auth();
     async function listAccountNames2() {
       const { fsp } = nodeDeps2();
       const { ACCOUNTS_DIR } = codexAuthPaths2();
@@ -252,12 +253,52 @@ var require_storage = __commonJS({
 `, "utf8");
         return matched;
       }
+      const active = await fsp.readFile(AUTH_PATH, "utf8");
+      const sameEmail = await findMatchingAccountByEmail(accounts, active);
+      if (sameEmail) {
+        await fsp.copyFile(AUTH_PATH, accountPath2(sameEmail));
+        await fsp.writeFile(CURRENT_NAME_PATH, `${sameEmail}
+`, "utf8");
+        return sameEmail;
+      }
       await ensureDir2(ACCOUNTS_DIR);
       const name = await nextAvailableAccountName("account");
       await fsp.copyFile(AUTH_PATH, accountPath2(name));
       await fsp.writeFile(CURRENT_NAME_PATH, `${name}
 `, "utf8");
       return name;
+    }
+    async function findMatchingAccountByEmail(accounts, activeContents) {
+      const activeEmail = emailFromAuthString(activeContents)?.toLowerCase();
+      if (!activeEmail) return null;
+      const { fsp } = nodeDeps2();
+      const { CURRENT_NAME_PATH } = codexAuthPaths2();
+      let current = null;
+      try {
+        current = (await fsp.readFile(CURRENT_NAME_PATH, "utf8")).trim();
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      const matches = [];
+      for (const name of accounts) {
+        try {
+          const filePath = accountPath2(name);
+          const [contents, stat] = await Promise.all([
+            fsp.readFile(filePath, "utf8"),
+            fsp.stat(filePath)
+          ]);
+          if (emailFromAuthString(contents)?.toLowerCase() === activeEmail) {
+            matches.push({ name, isCurrent: name === current, mtimeMs: stat.mtimeMs });
+          }
+        } catch {
+        }
+      }
+      matches.sort((a, b) => {
+        if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+        if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
+        return a.name.localeCompare(b.name, void 0, { sensitivity: "base" });
+      });
+      return matches[0]?.name || null;
     }
     async function nextAvailableAccountName(baseName) {
       const accounts = new Set(await listAccountNames2());
@@ -272,6 +313,7 @@ var require_storage = __commonJS({
       listAccountNames: listAccountNames2,
       getCurrentAccountName: getCurrentAccountName2,
       findMatchingAccountByContents,
+      findMatchingAccountByEmail,
       accountContentsMatchActive,
       ensureAutosavedActiveAccount,
       nextAvailableAccountName

@@ -10,6 +10,12 @@ const {
 const { readState } = require("./state");
 const { getCurrentAccountName, listAccountNames } = require("./storage");
 const { fetchActiveUsageSnapshot, writeAccountUsage } = require("./usage");
+const {
+  readAuthJson,
+  saveAuthSnapshotWithCurrentBaseUrl,
+  setTopLevelOpenAIBaseUrl,
+  syncOpenAIBaseUrlForAccount,
+} = require("./config");
 
 async function saveCurrentAccount(rawName) {
   const { fsp } = nodeDeps();
@@ -19,7 +25,7 @@ async function saveCurrentAccount(rawName) {
     throw new Error(`No active Codex auth file found at ${AUTH_PATH}`);
   }
   await ensureDir(ACCOUNTS_DIR);
-  await fsp.copyFile(AUTH_PATH, accountPath(name));
+  await saveAuthSnapshotWithCurrentBaseUrl(AUTH_PATH, accountPath(name));
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
   return readState({ notice: t("service.saved", { name }) });
 }
@@ -30,7 +36,9 @@ async function switchAccount(rawName, api) {
   const name = normalizeAccountName(rawName);
   const source = accountPath(name);
   if (!(await pathExists(source))) throw new Error(`Saved account not found: ${name}`);
+  const account = await readAuthJson(source, `Saved account ${name}`);
   await ensureDir(CODEX_DIR);
+  await syncOpenAIBaseUrlForAccount(account);
   await fsp.copyFile(source, AUTH_PATH);
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
   api?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
@@ -62,6 +70,7 @@ async function clearActiveAuth(api) {
   const { fsp, path } = nodeDeps();
   const { CODEX_DIR, AUTH_PATH, CURRENT_NAME_PATH } = codexAuthPaths();
   await ensureDir(CODEX_DIR);
+  await setTopLevelOpenAIBaseUrl(null);
   if (await pathExists(AUTH_PATH)) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     await fsp.copyFile(AUTH_PATH, path.join(CODEX_DIR, `auth.account-switcher-backup-${stamp}.json`));

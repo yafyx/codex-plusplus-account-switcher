@@ -15,6 +15,7 @@ function codexAuthPaths() {
   return {
     CODEX_DIR,
     AUTH_PATH: path.join(CODEX_DIR, "auth.json"),
+    CONFIG_PATH: path.join(CODEX_DIR, "config.toml"),
     ACCOUNTS_DIR: path.join(CODEX_DIR, "auth_accounts"),
     USAGE_CACHE_PATH: path.join(CODEX_DIR, "auth_accounts_usage.json"),
     CURRENT_NAME_PATH: path.join(CODEX_DIR, "current_account"),

@@ -20,14 +20,17 @@ function authWithEmail(email, extra = {}) {
 
 async function withTempHome(fn) {
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
     return await fn(home);
   } finally {
     process.env.HOME = originalHome;
+    process.env.USERPROFILE = originalUserProfile;
     await fs.rm(home, { recursive: true, force: true });
   }
 }
@@ -39,8 +42,10 @@ async function touch(filePath, isoDate) {
 
 test("state includes saved account email metadata", async () => {
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
@@ -62,14 +67,17 @@ test("state includes saved account email metadata", async () => {
     });
   } finally {
     process.env.HOME = originalHome;
+    process.env.USERPROFILE = originalUserProfile;
     await fs.rm(home, { recursive: true, force: true });
   }
 });
 
 test("state includes cached account usage metadata", async () => {
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
@@ -103,14 +111,17 @@ test("state includes cached account usage metadata", async () => {
     });
   } finally {
     process.env.HOME = originalHome;
+    process.env.USERPROFILE = originalUserProfile;
     await fs.rm(home, { recursive: true, force: true });
   }
 });
 
 test("refresh-usage stores active account usage", async () => {
   const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
@@ -143,8 +154,52 @@ test("refresh-usage stores active account usage", async () => {
     assert.equal(usageCache.work.fiveHour.pct, 64);
   } finally {
     process.env.HOME = originalHome;
+    process.env.USERPROFILE = originalUserProfile;
     await fs.rm(home, { recursive: true, force: true });
   }
+});
+
+test("switch syncs API account base URL into Codex config", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "chatgpt.json"), authWithEmail("me@example.com"));
+    await fs.writeFile(
+      path.join(accountsDir, "api.json"),
+      `${JSON.stringify(
+        {
+          auth_mode: "apikey",
+          OPENAI_API_KEY: "sk-test",
+          base_url: "https://example.com/v1",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
+    await fs.writeFile(
+      path.join(codexDir, "config.toml"),
+      'model = "gpt-5.5"\n\n[projects.test]\ntrust_level = "trusted"\n',
+    );
+
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const apiResult = await service.handle({ action: "switch", name: "api" });
+
+    assert.equal(apiResult.ok, true);
+    assert.match(
+      await fs.readFile(path.join(codexDir, "config.toml"), "utf8"),
+      /^openai_base_url = "https:\/\/example\.com\/v1"$/m,
+    );
+
+    const chatgptResult = await service.handle({ action: "switch", name: "chatgpt" });
+    assert.equal(chatgptResult.ok, true);
+    assert.doesNotMatch(
+      await fs.readFile(path.join(codexDir, "config.toml"), "utf8"),
+      /^openai_base_url\s*=/m,
+    );
+  });
 });
 
 test("state hides duplicate email accounts and keeps the active match", async () => {

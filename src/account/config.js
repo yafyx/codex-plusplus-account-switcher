@@ -32,7 +32,13 @@ async function readAuthJson(filePath, label) {
 }
 
 async function syncOpenAIBaseUrlForAccount(auth) {
-  await setTopLevelOpenAIBaseUrl(accountOpenAIBaseUrl(auth));
+  if (!isApiKeyAuth(auth)) {
+    await setTopLevelOpenAIBaseUrl(null);
+    return;
+  }
+
+  const baseUrl = accountOpenAIBaseUrl(auth);
+  if (baseUrl) await setTopLevelOpenAIBaseUrl(baseUrl);
 }
 
 function isApiKeyAuth(auth) {

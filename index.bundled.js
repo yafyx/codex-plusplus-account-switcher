@@ -170,123 +170,6 @@ var require_auth = __commonJS({
   }
 });
 
-// src/account/config.js
-var require_config = __commonJS({
-  "src/account/config.js"(exports2, module2) {
-    var { nodeDeps: nodeDeps2, codexAuthPaths: codexAuthPaths2, ensureDir: ensureDir2 } = require_node_utils();
-    async function saveAuthSnapshotWithCurrentBaseUrl2(sourcePath, targetPath) {
-      const { fsp } = nodeDeps2();
-      const raw = await fsp.readFile(sourcePath, "utf8");
-      let auth;
-      try {
-        auth = JSON.parse(raw);
-      } catch {
-        await fsp.writeFile(targetPath, raw, "utf8");
-        return;
-      }
-      const currentBaseUrl = await readCurrentOpenAIBaseUrl();
-      if (isApiKeyAuth(auth) && currentBaseUrl && !accountOpenAIBaseUrl(auth)) {
-        auth.base_url = currentBaseUrl;
-        await fsp.writeFile(targetPath, `${JSON.stringify(auth, null, 2)}
-`, "utf8");
-        return;
-      }
-      await fsp.writeFile(targetPath, raw, "utf8");
-    }
-    async function readAuthJson2(filePath, label) {
-      const { fsp } = nodeDeps2();
-      const raw = await fsp.readFile(filePath, "utf8");
-      try {
-        return JSON.parse(raw);
-      } catch {
-        throw new Error(`${label} is not valid JSON.`);
-      }
-    }
-    async function syncOpenAIBaseUrlForAccount2(auth) {
-      await setTopLevelOpenAIBaseUrl2(accountOpenAIBaseUrl(auth));
-    }
-    function isApiKeyAuth(auth) {
-      return auth?.auth_mode === "apikey" || !!auth?.OPENAI_API_KEY;
-    }
-    function accountOpenAIBaseUrl(auth) {
-      if (!isApiKeyAuth(auth)) return null;
-      for (const key of ["openai_base_url", "base_url", "OPENAI_BASE_URL"]) {
-        const baseUrl = normalizeBaseUrl(auth?.[key]);
-        if (baseUrl) return baseUrl;
-      }
-      return null;
-    }
-    function normalizeBaseUrl(value) {
-      if (typeof value !== "string") return null;
-      const trimmed = value.trim();
-      return trimmed ? trimmed : null;
-    }
-    async function readCurrentOpenAIBaseUrl() {
-      const { fsp } = nodeDeps2();
-      const { CONFIG_PATH } = codexAuthPaths2();
-      try {
-        return readTopLevelTomlString(await fsp.readFile(CONFIG_PATH, "utf8"), "openai_base_url");
-      } catch (error) {
-        if (error?.code === "ENOENT") return null;
-        throw error;
-      }
-    }
-    async function setTopLevelOpenAIBaseUrl2(baseUrl) {
-      const { fsp } = nodeDeps2();
-      const { CODEX_DIR, CONFIG_PATH } = codexAuthPaths2();
-      await ensureDir2(CODEX_DIR);
-      let current = "";
-      try {
-        current = await fsp.readFile(CONFIG_PATH, "utf8");
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
-      const next = updateTopLevelTomlString(current, "openai_base_url", baseUrl);
-      if (next !== current) {
-        await fsp.writeFile(CONFIG_PATH, next, "utf8");
-      }
-    }
-    function updateTopLevelTomlString(raw, key, value) {
-      const lines = raw ? raw.replace(/\r\n/g, "\n").split("\n") : [];
-      if (lines.length && lines[lines.length - 1] === "") lines.pop();
-      const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
-      const kept = [];
-      let firstTableIndex = null;
-      for (const line of lines) {
-        const isTableHeader = /^\s*\[/.test(line);
-        if (firstTableIndex === null && isTableHeader) firstTableIndex = kept.length;
-        if (firstTableIndex === null && keyPattern.test(line)) continue;
-        kept.push(line);
-      }
-      const insertAt = firstTableIndex === null ? kept.length : firstTableIndex;
-      if (value) {
-        kept.splice(insertAt, 0, `${key} = ${JSON.stringify(value)}`);
-      }
-      return `${kept.join("\n")}${kept.length ? "\n" : ""}`;
-    }
-    function readTopLevelTomlString(raw, key) {
-      const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(['"])(.*)\\1\\s*(?:#.*)?$`);
-      for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
-        if (/^\s*\[/.test(line)) return null;
-        const match = line.match(keyPattern);
-        if (!match) continue;
-        return match[2].trim() || null;
-      }
-      return null;
-    }
-    function escapeRegExp(value) {
-      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-    module2.exports = {
-      saveAuthSnapshotWithCurrentBaseUrl: saveAuthSnapshotWithCurrentBaseUrl2,
-      readAuthJson: readAuthJson2,
-      syncOpenAIBaseUrlForAccount: syncOpenAIBaseUrlForAccount2,
-      setTopLevelOpenAIBaseUrl: setTopLevelOpenAIBaseUrl2,
-      accountOpenAIBaseUrl
-    };
-  }
-});
-
 // src/account/storage.js
 var require_storage = __commonJS({
   "src/account/storage.js"(exports2, module2) {
@@ -298,7 +181,6 @@ var require_storage = __commonJS({
       pathExists: pathExists2
     } = require_node_utils();
     var { emailFromAuthString } = require_auth();
-    var { saveAuthSnapshotWithCurrentBaseUrl: saveAuthSnapshotWithCurrentBaseUrl2 } = require_config();
     async function listAccountNames2() {
       const { fsp } = nodeDeps2();
       const { ACCOUNTS_DIR } = codexAuthPaths2();
@@ -375,14 +257,14 @@ var require_storage = __commonJS({
       const active = await fsp.readFile(AUTH_PATH, "utf8");
       const sameEmail = await findMatchingAccountByEmail(accounts, active);
       if (sameEmail) {
-        await saveAuthSnapshotWithCurrentBaseUrl2(AUTH_PATH, accountPath2(sameEmail));
+        await fsp.copyFile(AUTH_PATH, accountPath2(sameEmail));
         await fsp.writeFile(CURRENT_NAME_PATH, `${sameEmail}
 `, "utf8");
         return sameEmail;
       }
       await ensureDir2(ACCOUNTS_DIR);
       const name = await nextAvailableAccountName("account");
-      await saveAuthSnapshotWithCurrentBaseUrl2(AUTH_PATH, accountPath2(name));
+      await fsp.copyFile(AUTH_PATH, accountPath2(name));
       await fsp.writeFile(CURRENT_NAME_PATH, `${name}
 `, "utf8");
       return name;
@@ -721,6 +603,128 @@ var require_state = __commonJS({
   }
 });
 
+// src/account/config.js
+var require_config = __commonJS({
+  "src/account/config.js"(exports2, module2) {
+    var { nodeDeps: nodeDeps2, codexAuthPaths: codexAuthPaths2, ensureDir: ensureDir2 } = require_node_utils();
+    async function saveAuthSnapshotWithCurrentBaseUrl2(sourcePath, targetPath) {
+      const { fsp } = nodeDeps2();
+      const raw = await fsp.readFile(sourcePath, "utf8");
+      let auth;
+      try {
+        auth = JSON.parse(raw);
+      } catch {
+        await fsp.writeFile(targetPath, raw, "utf8");
+        return;
+      }
+      const currentBaseUrl = await readCurrentOpenAIBaseUrl();
+      if (isApiKeyAuth(auth) && currentBaseUrl && !accountOpenAIBaseUrl(auth)) {
+        auth.base_url = currentBaseUrl;
+        await fsp.writeFile(targetPath, `${JSON.stringify(auth, null, 2)}
+`, "utf8");
+        return;
+      }
+      await fsp.writeFile(targetPath, raw, "utf8");
+    }
+    async function readAuthJson2(filePath, label) {
+      const { fsp } = nodeDeps2();
+      const raw = await fsp.readFile(filePath, "utf8");
+      try {
+        return JSON.parse(raw);
+      } catch {
+        throw new Error(`${label} is not valid JSON.`);
+      }
+    }
+    async function syncOpenAIBaseUrlForAccount2(auth) {
+      if (!isApiKeyAuth(auth)) {
+        await setTopLevelOpenAIBaseUrl2(null);
+        return;
+      }
+      const baseUrl = accountOpenAIBaseUrl(auth);
+      if (baseUrl) await setTopLevelOpenAIBaseUrl2(baseUrl);
+    }
+    function isApiKeyAuth(auth) {
+      return auth?.auth_mode === "apikey" || !!auth?.OPENAI_API_KEY;
+    }
+    function accountOpenAIBaseUrl(auth) {
+      if (!isApiKeyAuth(auth)) return null;
+      for (const key of ["openai_base_url", "base_url", "OPENAI_BASE_URL"]) {
+        const baseUrl = normalizeBaseUrl(auth?.[key]);
+        if (baseUrl) return baseUrl;
+      }
+      return null;
+    }
+    function normalizeBaseUrl(value) {
+      if (typeof value !== "string") return null;
+      const trimmed = value.trim();
+      return trimmed ? trimmed : null;
+    }
+    async function readCurrentOpenAIBaseUrl() {
+      const { fsp } = nodeDeps2();
+      const { CONFIG_PATH } = codexAuthPaths2();
+      try {
+        return readTopLevelTomlString(await fsp.readFile(CONFIG_PATH, "utf8"), "openai_base_url");
+      } catch (error) {
+        if (error?.code === "ENOENT") return null;
+        throw error;
+      }
+    }
+    async function setTopLevelOpenAIBaseUrl2(baseUrl) {
+      const { fsp } = nodeDeps2();
+      const { CODEX_DIR, CONFIG_PATH } = codexAuthPaths2();
+      await ensureDir2(CODEX_DIR);
+      let current = "";
+      try {
+        current = await fsp.readFile(CONFIG_PATH, "utf8");
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      const next = updateTopLevelTomlString(current, "openai_base_url", baseUrl);
+      if (next !== current) {
+        await fsp.writeFile(CONFIG_PATH, next, "utf8");
+      }
+    }
+    function updateTopLevelTomlString(raw, key, value) {
+      const lines = raw ? raw.replace(/\r\n/g, "\n").split("\n") : [];
+      if (lines.length && lines[lines.length - 1] === "") lines.pop();
+      const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
+      const kept = [];
+      let firstTableIndex = null;
+      for (const line of lines) {
+        const isTableHeader = /^\s*\[/.test(line);
+        if (firstTableIndex === null && isTableHeader) firstTableIndex = kept.length;
+        if (firstTableIndex === null && keyPattern.test(line)) continue;
+        kept.push(line);
+      }
+      const insertAt = firstTableIndex === null ? kept.length : firstTableIndex;
+      if (value) {
+        kept.splice(insertAt, 0, `${key} = ${JSON.stringify(value)}`);
+      }
+      return `${kept.join("\n")}${kept.length ? "\n" : ""}`;
+    }
+    function readTopLevelTomlString(raw, key) {
+      const keyPattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(['"])(.*)\\1\\s*(?:#.*)?$`);
+      for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+        if (/^\s*\[/.test(line)) return null;
+        const match = line.match(keyPattern);
+        if (!match) continue;
+        return match[2].trim() || null;
+      }
+      return null;
+    }
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    module2.exports = {
+      saveAuthSnapshotWithCurrentBaseUrl: saveAuthSnapshotWithCurrentBaseUrl2,
+      readAuthJson: readAuthJson2,
+      syncOpenAIBaseUrlForAccount: syncOpenAIBaseUrlForAccount2,
+      setTopLevelOpenAIBaseUrl: setTopLevelOpenAIBaseUrl2,
+      accountOpenAIBaseUrl
+    };
+  }
+});
+
 // src/account/actions.js
 var require_actions = __commonJS({
   "src/account/actions.js"(exports, module) {
@@ -761,9 +765,14 @@ var require_actions = __commonJS({
       const name = normalizeAccountName(rawName);
       const source = accountPath(name);
       if (!await pathExists(source)) throw new Error(`Saved account not found: ${name}`);
-      const account = await readAuthJson(source, `Saved account ${name}`);
       await ensureDir(CODEX_DIR);
-      await syncOpenAIBaseUrlForAccount(account);
+      try {
+        const account = await readAuthJson(source, `Saved account ${name}`);
+        await syncOpenAIBaseUrlForAccount(account);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        api2?.log?.warn?.(`[account-switcher] skipped base URL sync for ${name}: ${message}`);
+      }
       await fsp.copyFile(source, AUTH_PATH);
       await fsp.writeFile(CURRENT_NAME_PATH, `${name}
 `, "utf8");

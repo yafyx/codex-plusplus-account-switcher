@@ -18,6 +18,14 @@ function authWithEmail(email, extra = {}) {
   });
 }
 
+function restoreEnv(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 async function withTempHome(fn) {
   const originalHome = process.env.HOME;
   const originalUserProfile = process.env.USERPROFILE;
@@ -29,8 +37,8 @@ async function withTempHome(fn) {
   try {
     return await fn(home);
   } finally {
-    process.env.HOME = originalHome;
-    process.env.USERPROFILE = originalUserProfile;
+    restoreEnv("HOME", originalHome);
+    restoreEnv("USERPROFILE", originalUserProfile);
     await fs.rm(home, { recursive: true, force: true });
   }
 }
@@ -66,8 +74,8 @@ test("state includes saved account email metadata", async () => {
       work: "work@example.com",
     });
   } finally {
-    process.env.HOME = originalHome;
-    process.env.USERPROFILE = originalUserProfile;
+    restoreEnv("HOME", originalHome);
+    restoreEnv("USERPROFILE", originalUserProfile);
     await fs.rm(home, { recursive: true, force: true });
   }
 });
@@ -110,8 +118,8 @@ test("state includes cached account usage metadata", async () => {
       },
     });
   } finally {
-    process.env.HOME = originalHome;
-    process.env.USERPROFILE = originalUserProfile;
+    restoreEnv("HOME", originalHome);
+    restoreEnv("USERPROFILE", originalUserProfile);
     await fs.rm(home, { recursive: true, force: true });
   }
 });
@@ -153,8 +161,8 @@ test("refresh-usage stores active account usage", async () => {
     );
     assert.equal(usageCache.work.fiveHour.pct, 64);
   } finally {
-    process.env.HOME = originalHome;
-    process.env.USERPROFILE = originalUserProfile;
+    restoreEnv("HOME", originalHome);
+    restoreEnv("USERPROFILE", originalUserProfile);
     await fs.rm(home, { recursive: true, force: true });
   }
 });
@@ -195,6 +203,72 @@ test("switch syncs API account base URL into Codex config", async () => {
 
     const chatgptResult = await service.handle({ action: "switch", name: "chatgpt" });
     assert.equal(chatgptResult.ok, true);
+    assert.doesNotMatch(
+      await fs.readFile(path.join(codexDir, "config.toml"), "utf8"),
+      /^openai_base_url\s*=/m,
+    );
+  });
+});
+
+test("switch leaves config unchanged for API account without base URL", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(accountsDir, "api.json"),
+      `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }, null, 2)}\n`,
+    );
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
+    const config = 'openai_base_url = "https://existing.example/v1"\nmodel = "gpt-5.5"\n';
+    await fs.writeFile(path.join(codexDir, "config.toml"), config);
+
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const result = await service.handle({ action: "switch", name: "api" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "config.toml"), "utf8"), config);
+  });
+});
+
+test("switch still copies account when base URL sync cannot parse JSON", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "broken.json"), "{not valid json");
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
+    const warnings = [];
+
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService({
+      log: { info() {}, warn(message) { warnings.push(message); } },
+    });
+    const result = await service.handle({ action: "switch", name: "broken" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "auth.json"), "utf8"), "{not valid json");
+    assert.equal((await fs.readFile(path.join(codexDir, "current_account"), "utf8")).trim(), "broken");
+    assert.match(warnings[0], /skipped base URL sync/);
+  });
+});
+
+test("clear-active removes configured base URL", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    await fs.mkdir(codexDir, { recursive: true });
+    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
+    await fs.writeFile(
+      path.join(codexDir, "config.toml"),
+      'openai_base_url = "https://example.com/v1"\nmodel = "gpt-5.5"\n',
+    );
+
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const result = await service.handle({ action: "clear-active" });
+
+    assert.equal(result.ok, true);
     assert.doesNotMatch(
       await fs.readFile(path.join(codexDir, "config.toml"), "utf8"),
       /^openai_base_url\s*=/m,

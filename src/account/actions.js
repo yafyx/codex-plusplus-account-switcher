@@ -36,9 +36,14 @@ async function switchAccount(rawName, api) {
   const name = normalizeAccountName(rawName);
   const source = accountPath(name);
   if (!(await pathExists(source))) throw new Error(`Saved account not found: ${name}`);
-  const account = await readAuthJson(source, `Saved account ${name}`);
   await ensureDir(CODEX_DIR);
-  await syncOpenAIBaseUrlForAccount(account);
+  try {
+    const account = await readAuthJson(source, `Saved account ${name}`);
+    await syncOpenAIBaseUrlForAccount(account);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    api?.log?.warn?.(`[account-switcher] skipped base URL sync for ${name}: ${message}`);
+  }
   await fsp.copyFile(source, AUTH_PATH);
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
   api?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);

@@ -1,7 +1,7 @@
 const { errorMessage } = require("./utils");
 const { invoke } = require("./ipc");
 const { t } = require("./i18n");
-const { protectInteractiveControl } = require("./dom-utils");
+const { compactText, isVisible, protectInteractiveControl } = require("./dom-utils");
 const { renderAccountsPageState } = require("./ui-settings");
 const {
   accountPanelShell,
@@ -187,12 +187,42 @@ function findRateLimitsChevron(panel) {
   const menu =
     panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
     document;
-  const rateLimits = Array.from(menu.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
-    return element instanceof HTMLElement && /\brate limits/i.test(element.textContent || "");
-  });
-  if (!(rateLimits instanceof HTMLElement)) return null;
-  const icons = Array.from(rateLimits.querySelectorAll("svg"));
+  const usageRemaining = findUsageRemainingItem(menu);
+  if (!(usageRemaining instanceof HTMLElement)) return null;
+  const icons = Array.from(usageRemaining.querySelectorAll("svg"));
   return icons.length ? icons[icons.length - 1] : null;
+}
+
+function findUsageRemainingItem(root) {
+  const selectorMatch = root.querySelector(
+    [
+      '[id*="usage" i]',
+      '[class*="usage" i]',
+      '[data-testid*="usage" i]',
+      '[data-test*="usage" i]',
+      '[aria-label*="usage" i]',
+      '[title*="usage" i]',
+    ].join(","),
+  );
+  if (
+    selectorMatch instanceof HTMLElement &&
+    isVisible(selectorMatch) &&
+    !selectorMatch.closest("[data-codexpp-account-switcher]")
+  ) {
+    const item = selectorMatch.closest('button, a, [role="button"], [role="menuitem"]');
+    return item instanceof HTMLElement && isVisible(item) ? item : selectorMatch;
+  }
+
+  return Array.from(root.querySelectorAll('button, a, [role="button"], [role="menuitem"]')).find(
+    (element) => {
+      return (
+        element instanceof HTMLElement &&
+        isVisible(element) &&
+        !element.closest("[data-codexpp-account-switcher]") &&
+        /\busage remaining\b/i.test(compactText(element))
+      );
+    },
+  );
 }
 
 // ─── Per-account row ──────────────────────────────────────────────────────────

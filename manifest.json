@@ -1,7 +1,7 @@
 {
   "id": "me.erkin.codex-plusplus-account-switcher",
   "name": "Codex Account Switcher",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Switch Codex accounts from the account popup and manage saved auth sessions in Settings.",
   "githubRepo": "erknvl/codex-plusplus-account-switcher",
   "author": {

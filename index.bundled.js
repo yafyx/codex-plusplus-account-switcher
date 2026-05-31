@@ -1228,7 +1228,7 @@ var require_ui_popup = __commonJS({
     var { errorMessage } = require_utils();
     var { invoke } = require_ipc();
     var { t: t2 } = require_i18n();
-    var { protectInteractiveControl } = require_dom_utils();
+    var { compactText, isVisible, protectInteractiveControl } = require_dom_utils();
     var { renderAccountsPageState } = require_ui_settings();
     var {
       accountPanelShell,
@@ -1365,12 +1365,31 @@ var require_ui_popup = __commonJS({
     }
     function findRateLimitsChevron(panel) {
       const menu = panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') || document;
-      const rateLimits = Array.from(menu.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
-        return element instanceof HTMLElement && /\brate limits/i.test(element.textContent || "");
-      });
-      if (!(rateLimits instanceof HTMLElement)) return null;
-      const icons = Array.from(rateLimits.querySelectorAll("svg"));
+      const usageRemaining = findUsageRemainingItem(menu);
+      if (!(usageRemaining instanceof HTMLElement)) return null;
+      const icons = Array.from(usageRemaining.querySelectorAll("svg"));
       return icons.length ? icons[icons.length - 1] : null;
+    }
+    function findUsageRemainingItem(root) {
+      const selectorMatch = root.querySelector(
+        [
+          '[id*="usage" i]',
+          '[class*="usage" i]',
+          '[data-testid*="usage" i]',
+          '[data-test*="usage" i]',
+          '[aria-label*="usage" i]',
+          '[title*="usage" i]'
+        ].join(",")
+      );
+      if (selectorMatch instanceof HTMLElement && isVisible(selectorMatch) && !selectorMatch.closest("[data-codexpp-account-switcher]")) {
+        const item = selectorMatch.closest('button, a, [role="button"], [role="menuitem"]');
+        return item instanceof HTMLElement && isVisible(item) ? item : selectorMatch;
+      }
+      return Array.from(root.querySelectorAll('button, a, [role="button"], [role="menuitem"]')).find(
+        (element) => {
+          return element instanceof HTMLElement && isVisible(element) && !element.closest("[data-codexpp-account-switcher]") && /\busage remaining\b/i.test(compactText(element));
+        }
+      );
     }
     function accountRow(state, panel, accountState, name) {
       const row = document.createElement("button");
@@ -1562,36 +1581,53 @@ var require_renderer = __commonJS({
         if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) continue;
         const text = compactText(candidate);
         if (!/\bsettings\b/i.test(text) || !/\blog out\b/i.test(text)) continue;
-        if (!/\brate limits remaining\b/i.test(text) && !/\bpersonal account\b/i.test(text)) continue;
+        if (!hasUsageRemainingItem(candidate) && !/\bpersonal account\b/i.test(text)) continue;
         return candidate.matches("[data-radix-popper-content-wrapper]") ? candidate.querySelector('[role="menu"], [data-radix-menu-content]') || candidate : candidate;
       }
       return findAccountMenuByRateLimits() || findSidebarAccountMenuByItems();
     }
     function findAccountMenuByRateLimits() {
-      const rateLimits = findRateLimitsItem();
-      if (!rateLimits) return null;
-      const menu = rateLimits.closest(
+      const usageRemaining = findUsageRemainingItem();
+      if (!usageRemaining) return null;
+      const menu = usageRemaining.closest(
         '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]'
       );
       if (menu instanceof HTMLElement && isVisible(menu)) {
         const text = compactText(menu);
-        if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || /\brate limits/i.test(text)) {
+        if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || hasUsageRemainingItem(menu)) {
           return menu.matches("[data-radix-popper-content-wrapper]") ? menu.querySelector('[role="menu"], [data-radix-menu-content]') || menu : menu;
         }
       }
-      const parent = rateLimits.parentElement;
+      const parent = usageRemaining.parentElement;
       return parent instanceof HTMLElement && isVisible(parent) ? parent : null;
     }
-    function findRateLimitsItem(root = document) {
+    function findUsageRemainingItem(root = document) {
+      const selectorMatch = root.querySelector(
+        [
+          '[id*="usage" i]',
+          '[class*="usage" i]',
+          '[data-testid*="usage" i]',
+          '[data-test*="usage" i]',
+          '[aria-label*="usage" i]',
+          '[title*="usage" i]'
+        ].join(",")
+      );
+      if (selectorMatch instanceof HTMLElement && isVisible(selectorMatch) && !selectorMatch.closest("[data-codexpp-account-switcher]")) {
+        const item = selectorMatch.closest('button, a, [role="button"], [role="menuitem"]');
+        return item instanceof HTMLElement && isVisible(item) ? item : selectorMatch;
+      }
       const candidates2 = root.querySelectorAll('button, a, [role="button"], [role="menuitem"]');
       for (const element of candidates2) {
         if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
         if (element.closest("[data-codexpp-account-switcher]")) continue;
         const text = compactText(element).toLowerCase();
-        if (!/\brate limits remaining\b/.test(text) && !/\brate limits\b/.test(text)) continue;
+        if (!/\busage remaining\b/.test(text) && !/\brate limits remaining\b/.test(text)) continue;
         return element;
       }
       return null;
+    }
+    function hasUsageRemainingItem(root) {
+      return Boolean(findUsageRemainingItem(root));
     }
     function findSidebarAccountMenuByItems() {
       const items = Array.from(
@@ -1604,7 +1640,7 @@ var require_renderer = __commonJS({
       while (node && node !== document.body) {
         if (node.contains(logout)) {
           const text = compactText(node);
-          if (/\brate limits remaining\b/i.test(text) || /\bpersonal account\b/i.test(text)) {
+          if (hasUsageRemainingItem(node) || /\bpersonal account\b/i.test(text)) {
             return node;
           }
         }
@@ -1613,7 +1649,7 @@ var require_renderer = __commonJS({
       return null;
     }
     function installAccountSwitcher(state, menu) {
-      const target = findMenuItem(menu, /rate limits remaining/i) || findMenuItem(menu, /rate limits/i) || findMenuItem(menu, /settings/i) || Array.from(menu.children).find((child) => child instanceof HTMLElement);
+      const target = findUsageRemainingItem(menu) || findMenuItem(menu, /settings/i) || Array.from(menu.children).find((child) => child instanceof HTMLElement);
       if (!(target instanceof HTMLElement) || !target.parentElement) return;
       const panel = accountPanelShell(target);
       target.before(panel);

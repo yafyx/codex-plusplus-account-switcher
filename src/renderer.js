@@ -73,7 +73,7 @@ function findSettingsAccountMenu() {
     if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) continue;
     const text = compactText(candidate);
     if (!/\bsettings\b/i.test(text) || !/\blog out\b/i.test(text)) continue;
-    if (!/\brate limits remaining\b/i.test(text) && !/\bpersonal account\b/i.test(text)) continue;
+    if (!hasUsageRemainingItem(candidate) && !/\bpersonal account\b/i.test(text)) continue;
     return candidate.matches("[data-radix-popper-content-wrapper]")
       ? candidate.querySelector('[role="menu"], [data-radix-menu-content]') || candidate
       : candidate;
@@ -82,33 +82,56 @@ function findSettingsAccountMenu() {
 }
 
 function findAccountMenuByRateLimits() {
-  const rateLimits = findRateLimitsItem();
-  if (!rateLimits) return null;
-  const menu = rateLimits.closest(
+  const usageRemaining = findUsageRemainingItem();
+  if (!usageRemaining) return null;
+  const menu = usageRemaining.closest(
     '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]',
   );
   if (menu instanceof HTMLElement && isVisible(menu)) {
     const text = compactText(menu);
-    if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || /\brate limits/i.test(text)) {
+    if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || hasUsageRemainingItem(menu)) {
       return menu.matches("[data-radix-popper-content-wrapper]")
         ? menu.querySelector('[role="menu"], [data-radix-menu-content]') || menu
         : menu;
     }
   }
-  const parent = rateLimits.parentElement;
+  const parent = usageRemaining.parentElement;
   return parent instanceof HTMLElement && isVisible(parent) ? parent : null;
 }
 
-function findRateLimitsItem(root = document) {
+function findUsageRemainingItem(root = document) {
+  const selectorMatch = root.querySelector(
+    [
+      '[id*="usage" i]',
+      '[class*="usage" i]',
+      '[data-testid*="usage" i]',
+      '[data-test*="usage" i]',
+      '[aria-label*="usage" i]',
+      '[title*="usage" i]',
+    ].join(","),
+  );
+  if (
+    selectorMatch instanceof HTMLElement &&
+    isVisible(selectorMatch) &&
+    !selectorMatch.closest("[data-codexpp-account-switcher]")
+  ) {
+    const item = selectorMatch.closest('button, a, [role="button"], [role="menuitem"]');
+    return item instanceof HTMLElement && isVisible(item) ? item : selectorMatch;
+  }
+
   const candidates = root.querySelectorAll('button, a, [role="button"], [role="menuitem"]');
   for (const element of candidates) {
     if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
     if (element.closest("[data-codexpp-account-switcher]")) continue;
     const text = compactText(element).toLowerCase();
-    if (!/\brate limits remaining\b/.test(text) && !/\brate limits\b/.test(text)) continue;
+    if (!/\busage remaining\b/.test(text) && !/\brate limits remaining\b/.test(text)) continue;
     return element;
   }
   return null;
+}
+
+function hasUsageRemainingItem(root) {
+  return Boolean(findUsageRemainingItem(root));
 }
 
 function findSidebarAccountMenuByItems() {
@@ -123,7 +146,7 @@ function findSidebarAccountMenuByItems() {
   while (node && node !== document.body) {
     if (node.contains(logout)) {
       const text = compactText(node);
-      if (/\brate limits remaining\b/i.test(text) || /\bpersonal account\b/i.test(text)) {
+      if (hasUsageRemainingItem(node) || /\bpersonal account\b/i.test(text)) {
         return node;
       }
     }
@@ -134,8 +157,7 @@ function findSidebarAccountMenuByItems() {
 
 function installAccountSwitcher(state, menu) {
   const target =
-    findMenuItem(menu, /rate limits remaining/i) ||
-    findMenuItem(menu, /rate limits/i) ||
+    findUsageRemainingItem(menu) ||
     findMenuItem(menu, /settings/i) ||
     Array.from(menu.children).find((child) => child instanceof HTMLElement);
   if (!(target instanceof HTMLElement) || !target.parentElement) return;

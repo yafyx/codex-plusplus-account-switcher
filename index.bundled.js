@@ -259,7 +259,7 @@ var require_storage = __commonJS({
         return false;
       }
     }
-    async function ensureAutosavedActiveAccount() {
+    async function ensureAutosavedActiveAccount2() {
       const { fsp } = nodeDeps2();
       const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths2();
       if (!await pathExists2(AUTH_PATH)) return null;
@@ -332,7 +332,7 @@ var require_storage = __commonJS({
       findMatchingAccountByContents,
       findMatchingAccountByEmail,
       accountContentsMatchActive,
-      ensureAutosavedActiveAccount,
+      ensureAutosavedActiveAccount: ensureAutosavedActiveAccount2,
       nextAvailableAccountName
     };
   }
@@ -603,14 +603,14 @@ var require_state = __commonJS({
     var { emailFromAuthString, planFromAuthString } = require_auth();
     var {
       accountContentsMatchActive,
-      ensureAutosavedActiveAccount,
+      ensureAutosavedActiveAccount: ensureAutosavedActiveAccount2,
       getCurrentAccountName: getCurrentAccountName2,
       listAccountNames: listAccountNames2
     } = require_storage();
     var { readAccountUsage: readAccountUsage2 } = require_usage();
     async function readState2(extra = {}) {
       const { AUTH_PATH, ACCOUNTS_DIR, CONFIG_PATH, CURRENT_NAME_PATH } = codexAuthPaths2();
-      await ensureAutosavedActiveAccount();
+      await ensureAutosavedActiveAccount2();
       const allAccounts = await listAccountNames2();
       const visibleAccounts = await selectVisibleAccounts(allAccounts);
       const accounts = visibleAccounts.map((account) => account.name);
@@ -819,7 +819,11 @@ var require_actions = __commonJS({
       pathExists
     } = require_node_utils();
     var { readState } = require_state();
-    var { getCurrentAccountName, listAccountNames } = require_storage();
+    var {
+      ensureAutosavedActiveAccount,
+      getCurrentAccountName,
+      listAccountNames
+    } = require_storage();
     var { fetchActiveUsageSnapshot, writeAccountUsage } = require_usage();
     var {
       readAuthJson,
@@ -851,6 +855,7 @@ var require_actions = __commonJS({
       const source = accountPath(name);
       if (!await pathExists(source)) throw new Error(`Saved account not found: ${name}`);
       await ensureDir(CODEX_DIR);
+      await ensureAutosavedActiveAccount();
       try {
         const account = await readAuthJson(source, `Saved account ${name}`);
         await syncOpenAIBaseUrlForAccount(account);
@@ -1219,6 +1224,31 @@ var require_ipc = __commonJS({
   }
 });
 
+// src/usage-refresh.js
+var require_usage_refresh = __commonJS({
+  "src/usage-refresh.js"(exports2, module2) {
+    var { errorMessage } = require_utils();
+    var { invoke } = require_ipc();
+    var USAGE_REFRESH_INTERVAL_MS = 6e4;
+    function refreshUsageInBackground(state, render) {
+      const now = Date.now();
+      if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < USAGE_REFRESH_INTERVAL_MS) {
+        return;
+      }
+      state.usageRefreshInFlight = true;
+      state.lastUsageRefreshAt = now;
+      invoke(state, "refresh-usage").then((accountState) => {
+        render(accountState);
+      }).catch((error) => {
+        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
+      }).finally(() => {
+        state.usageRefreshInFlight = false;
+      });
+    }
+    module2.exports = { USAGE_REFRESH_INTERVAL_MS, refreshUsageInBackground };
+  }
+});
+
 // src/ui-components.js
 var require_ui_components = __commonJS({
   "src/ui-components.js"(exports2, module2) {
@@ -1569,522 +1599,20 @@ var require_ui_components = __commonJS({
   }
 });
 
-// src/ui-settings.js
-var require_ui_settings = __commonJS({
-  "src/ui-settings.js"(exports2, module2) {
-    var { errorMessage } = require_utils();
-    var { invoke } = require_ipc();
-    var { t: t2 } = require_i18n();
+// src/ui-account-row.js
+var require_ui_account_row = __commonJS({
+  "src/ui-account-row.js"(exports2, module2) {
     var {
-      settingsButton,
-      settingsSection,
-      settingsCard,
-      settingsRowShell,
-      settingsInfoRow,
-      settingsActionRow,
-      settingsStatus,
-      accountDisplayName,
-      accountUsageSummary,
-      bindButtonAction
-    } = require_ui_components();
-    async function renderAccountsPage(state, root) {
-      root.textContent = "";
-      root.appendChild(settingsStatus(t2("accounts.loading")));
-      try {
-        const accountState = await invoke(state, "state");
-        renderAccountsPageState(state, root, accountState);
-        refreshUsageInBackground(state, root);
-      } catch (error) {
-        root.textContent = "";
-        root.appendChild(settingsStatus(errorMessage(error), true));
-      }
-    }
-    function renderAccountsPageState(state, root, accountState) {
-      root.textContent = "";
-      const intro = settingsSection(t2("settings.activeSession"));
-      const introCard = settingsCard();
-      const currentName = accountState.current || (accountState.hasActiveAuth ? t2("settings.unsavedAccount") : t2("settings.noActiveSession"));
-      const currentValue = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : currentName;
-      introCard.appendChild(
-        settingsInfoRow(
-          t2("settings.signedInAs"),
-          currentValue,
-          accountState.hasActiveAuth ? t2("settings.activeAuthDescription") : t2("settings.noAuthDescription")
-        )
-      );
-      intro.appendChild(introCard);
-      root.appendChild(intro);
-      const actions = settingsSection(t2("settings.accountSetup"));
-      const actionCard = settingsCard();
-      actionCard.appendChild(
-        settingsActionRow(
-          t2("settings.signInAnother"),
-          t2("settings.signInAnotherDescription"),
-          t2("settings.startSignIn"),
-          () => clearActiveFromSettings(state, root)
-        )
-      );
-      actionCard.appendChild(
-        settingsActionRow(
-          t2("settings.refreshSaved"),
-          t2("settings.refreshSavedDescription"),
-          t2("settings.refresh"),
-          () => renderAccountsPage(state, root)
-        )
-      );
-      actions.appendChild(actionCard);
-      root.appendChild(actions);
-      const saved = settingsSection(t2("settings.savedAccounts"));
-      const savedCard = settingsCard();
-      const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
-      if (!accounts.length) {
-        savedCard.appendChild(
-          settingsInfoRow(
-            t2("settings.noSavedAccounts"),
-            t2("settings.noneFound"),
-            t2("settings.noSavedAccountsDescription")
-          )
-        );
-      } else {
-        for (const name of accounts) {
-          savedCard.appendChild(settingsAccountRow(state, root, accountState, name));
-        }
-      }
-      saved.appendChild(savedCard);
-      root.appendChild(saved);
-      if (accountState.notice || accountState.error) {
-        root.appendChild(settingsStatus(accountState.notice || accountState.error, !!accountState.error));
-      }
-    }
-    function settingsAccountRow(state, root, accountState, name) {
-      const row = settingsRowShell();
-      const left = document.createElement("div");
-      left.className = "flex min-w-0 flex-col gap-1";
-      const title = document.createElement("div");
-      title.className = "min-w-0 truncate text-sm text-token-text-primary";
-      title.textContent = accountDisplayName(accountState, name);
-      title.title = accountDisplayName(accountState, name, { includeCurrent: false });
-      left.appendChild(title);
-      const desc = document.createElement("div");
-      desc.className = "text-token-text-secondary min-w-0 text-sm";
-      desc.textContent = accountUsageSummary(accountState, name) || (accountState.current === name ? t2("settings.activeInWindow") : t2("settings.usageUnchecked"));
-      left.appendChild(desc);
-      row.appendChild(left);
-      const actionsEl = document.createElement("div");
-      actionsEl.className = "flex shrink-0 items-center gap-2";
-      const switchButton = settingsButton(t2("settings.switch"));
-      switchButton.disabled = accountState.current === name;
-      bindButtonAction(
-        switchButton,
-        () => runSettingsAction(state, root, "switch", { name }, t2("accounts.switching"))
-      );
-      actionsEl.appendChild(switchButton);
-      const removeButton = settingsButton(t2("settings.delete"));
-      bindButtonAction(removeButton, () => {
-        runSettingsAction(state, root, "delete", { name }, t2("settings.removing"));
-      });
-      actionsEl.appendChild(removeButton);
-      row.appendChild(actionsEl);
-      return row;
-    }
-    function clearActiveFromSettings(state, root) {
-      runSettingsAction(state, root, "clear-active", {}, t2("accounts.preparingSignIn"));
-    }
-    function refreshUsageInBackground(state, root) {
-      const now = Date.now();
-      if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < 6e4) return;
-      state.usageRefreshInFlight = true;
-      state.lastUsageRefreshAt = now;
-      invoke(state, "refresh-usage").then((accountState) => {
-        if (root.isConnected) renderAccountsPageState(state, root, accountState);
-      }).catch((error) => {
-        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
-      }).finally(() => {
-        state.usageRefreshInFlight = false;
-      });
-    }
-    async function runSettingsAction(state, root, action, payload, loadingText) {
-      root.textContent = "";
-      root.appendChild(settingsStatus(loadingText));
-      try {
-        const accountState = await invoke(state, action, payload);
-        if (action === "switch" || action === "clear-active") {
-          root.textContent = "";
-          root.appendChild(settingsStatus(authReloadMessage(action, accountState)));
-          scheduleAppRelaunch(state, root);
-          return;
-        }
-        renderAccountsPageState(state, root, accountState);
-      } catch (error) {
-        renderAccountsPageState(state, root, {
-          ...state.lastState || { accounts: [], current: null, hasActiveAuth: false },
-          error: errorMessage(error)
-        });
-      }
-    }
-    function authReloadMessage(action, accountState) {
-      if (action === "clear-active") {
-        return t2("accounts.sessionClearedRelaunching");
-      }
-      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : t2("accounts.selected");
-      return t2("accounts.switchedRelaunching", { email });
-    }
-    function scheduleAppRelaunch(state, root) {
-      window.setTimeout(() => {
-        invoke(state, "relaunch").catch((error) => {
-          root.textContent = "";
-          root.appendChild(settingsStatus(t2("accounts.relaunchFailed", { error: errorMessage(error) }), true));
-        });
-      }, 1200);
-    }
-    module2.exports = {
-      renderAccountsPage,
-      renderAccountsPageState
-    };
-  }
-});
-
-// src/ui-collapsible.js
-var require_ui_collapsible = __commonJS({
-  "src/ui-collapsible.js"(exports2, module2) {
-    var { prefersReducedMotion } = require_ui_components();
-    var ACCOUNTS_PANEL_TRANSITION_MS = 300;
-    var ACCOUNTS_PANEL_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
-    var ACCOUNTS_CHEVRON_COLLAPSED = "rotate(0deg)";
-    var ACCOUNTS_CHEVRON_EXPANDED = "rotate(90deg)";
-    var ACCOUNTS_BODY_COLLAPSED_TRANSFORM = "translateY(-2px)";
-    var ACCOUNTS_BODY_EXPANDED_TRANSFORM = "translateY(0)";
-    function accountsPanelDuration() {
-      if (prefersReducedMotion()) return 0;
-      return ACCOUNTS_PANEL_TRANSITION_MS;
-    }
-    function accountsBodyTransition(duration) {
-      return `max-height ${duration}ms ${ACCOUNTS_PANEL_EASING},opacity ${duration}ms ${ACCOUNTS_PANEL_EASING},transform ${duration}ms ${ACCOUNTS_PANEL_EASING}`;
-    }
-    function accountsChevronTransform(expanded) {
-      return expanded ? ACCOUNTS_CHEVRON_EXPANDED : ACCOUNTS_CHEVRON_COLLAPSED;
-    }
-    function accountsBodyCss(expanded) {
-      return [
-        "overflow:hidden",
-        "max-height:0",
-        "opacity:0",
-        `transform:${expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM}`,
-        `pointer-events:${expanded ? "auto" : "none"}`,
-        `transition:${expanded ? "none" : accountsBodyTransition(ACCOUNTS_PANEL_TRANSITION_MS)}`
-      ].join(";");
-    }
-    function createAccountsCollapsible(state, elements, expanded) {
-      applyAccountsExpanded(state, elements, expanded, { animate: false });
-      if (expanded && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-        window.requestAnimationFrame(() => {
-          if (elements.body.isConnected) {
-            elements.body.style.transition = accountsBodyTransition(accountsPanelDuration());
-          }
-        });
-      }
-      return {
-        toggle() {
-          applyAccountsExpanded(state, elements, !state.accountsExpanded, { animate: true });
-        },
-        collapse() {
-          applyAccountsExpanded(state, elements, false, { animate: true });
-        }
-      };
-    }
-    function applyAccountsExpanded(state, elements, expanded, options) {
-      state.accountsExpanded = expanded;
-      const duration = options.animate ? accountsPanelDuration() : 0;
-      if (options.animate) {
-        elements.body.style.transition = accountsBodyTransition(duration);
-      }
-      elements.body.style.pointerEvents = expanded ? "auto" : "none";
-      elements.body.style.maxHeight = expanded ? elements.body.scrollHeight + "px" : "0";
-      elements.body.style.opacity = expanded ? "1" : "0";
-      elements.body.style.transform = expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM;
-      elements.header.setAttribute("aria-expanded", String(expanded));
-      if (elements.chevron) {
-        elements.chevron.style.transitionDuration = duration + "ms";
-        elements.chevron.style.transform = accountsChevronTransform(expanded);
-      }
-      for (const note of elements.notes) {
-        note.style.display = expanded ? "block" : "none";
-      }
-    }
-    module2.exports = {
-      ACCOUNTS_PANEL_EASING,
-      ACCOUNTS_PANEL_TRANSITION_MS,
-      accountsBodyCss,
-      accountsBodyTransition,
-      accountsChevronTransform,
-      accountsPanelDuration,
-      createAccountsCollapsible
-    };
-  }
-});
-
-// src/ui-popup.js
-var require_ui_popup = __commonJS({
-  "src/ui-popup.js"(exports2, module2) {
-    var { errorMessage } = require_utils();
-    var { invoke } = require_ipc();
-    var { t: t2 } = require_i18n();
-    var { protectInteractiveControl } = require_dom_utils();
-    var { renderAccountsPageState } = require_ui_settings();
-    var {
-      accountPanelShell,
-      setPanelStatus,
       accountDisplayName,
       accountUsageParts,
       accountUsageTitle,
       addButtonFeedback,
-      bindButtonAction,
-      prefersReducedMotion
+      bindButtonAction
     } = require_ui_components();
-    var {
-      ACCOUNTS_PANEL_EASING,
-      accountsBodyCss,
-      accountsChevronTransform,
-      accountsPanelDuration,
-      createAccountsCollapsible
-    } = require_ui_collapsible();
-    var ACCOUNTS_CHEVRON_SIZE = "16";
-    var ACCOUNTS_CHEVRON_COLOR = "#5C5B56";
+    var { protectInteractiveControl } = require_dom_utils();
     var ACCOUNT_CURRENT_BACKGROUND = "color-mix(in srgb,currentColor 5%,transparent)";
     var ACCOUNT_CURRENT_SHADOW = "inset 0 0 0 1px color-mix(in srgb,currentColor 7%,transparent)";
-    function renderAccountPanel(state, panel, accountState) {
-      panel.textContent = "";
-      panel.setAttribute("data-codexpp-account-switcher", "panel");
-      const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
-      const expanded = state.accountsExpanded === true;
-      const section = document.createElement("div");
-      section.style.cssText = "display:flex;flex-direction:column;padding:0;";
-      const header = accountsHeaderRow(state, panel, accountState, expanded);
-      section.appendChild(header);
-      const list = document.createElement("div");
-      list.style.cssText = "display:flex;flex-direction:column;min-width:0;gap:1px;padding:2px 0 4px;";
-      if (accounts.length === 0) {
-        const empty = document.createElement("div");
-        empty.textContent = accountState.hasActiveAuth ? t2("accounts.emptySaved") : t2("accounts.emptyActive");
-        empty.style.cssText = "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px var(--codexpp-menu-row-padding-right,24px) 4px var(--codexpp-menu-text-inset,64px);";
-        list.appendChild(empty);
-      }
-      for (const name of accounts) {
-        list.appendChild(accountRow(state, panel, accountState, name));
-      }
-      list.appendChild(configureAccountsRow(state, panel));
-      const body = document.createElement("div");
-      body.setAttribute("data-codexpp-account-switcher-body", "accounts");
-      body.style.cssText = accountsBodyCss(expanded);
-      const bodyInner = document.createElement("div");
-      bodyInner.style.cssText = "min-height:0;";
-      bodyInner.appendChild(list);
-      body.appendChild(bodyInner);
-      section.appendChild(body);
-      panel.appendChild(section);
-      const notes = [];
-      if (accountState.notice || accountState.error) {
-        const note = document.createElement("div");
-        note.setAttribute("data-codexpp-account-switcher-notice", "");
-        note.textContent = accountState.notice || accountState.error;
-        note.style.cssText = "padding:0 var(--codexpp-menu-row-padding-right,24px) 6px var(--codexpp-menu-text-inset,64px);font-size:11px;line-height:1.3;color:" + (accountState.error ? "var(--color-token-text-error,#ff6b6b)" : "var(--color-token-text-secondary,currentColor)") + ";";
-        if (expanded) note.style.display = "block";
-        else note.style.display = "none";
-        notes.push(note);
-        panel.appendChild(note);
-      }
-      panel._codexppAccountsCollapsible = createAccountsCollapsible(
-        state,
-        {
-          body,
-          header,
-          chevron: header.querySelector("[data-accounts-chevron] svg"),
-          notes
-        },
-        expanded
-      );
-    }
-    function accountsHeaderRow(state, panel, accountState, expanded) {
-      const metrics = nativeCollapsibleMetrics(panel);
-      const button = document.createElement("button");
-      button.type = "button";
-      button.setAttribute("aria-expanded", expanded ? "true" : "false");
-      button.style.cssText = [
-        "width:100%",
-        "border:0",
-        "background:transparent",
-        "color:var(--color-token-text-primary,currentColor)",
-        "font:inherit",
-        "font-size:13px",
-        "line-height:1.25",
-        "text-align:left",
-        "border-radius:var(--codexpp-menu-row-radius,8px)",
-        "min-height:var(--codexpp-menu-row-height,40px)",
-        "padding:var(--codexpp-menu-row-padding-top,0) var(--codexpp-menu-row-padding-right,24px) var(--codexpp-menu-row-padding-bottom,0) var(--codexpp-menu-text-inset,64px)",
-        "position:relative",
-        "cursor:default",
-        "display:flex",
-        "align-items:center",
-        "gap:0"
-      ].join(";");
-      button.appendChild(accountsIconSlot());
-      const title = document.createElement("span");
-      title.textContent = t2("accounts.title");
-      title.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;";
-      button.appendChild(title);
-      const chevronSlot = document.createElement("span");
-      chevronSlot.setAttribute("data-accounts-chevron", "");
-      chevronSlot.style.cssText = `display:flex;align-items:center;justify-content:center;width:${metrics.chevronSlotWidth};height:20px;margin-left:auto;margin-right:${metrics.chevronMarginRight};flex:0 0 ${metrics.chevronSlotWidth};color:${metrics.chevronColor};opacity:${metrics.chevronOpacity};`;
-      chevronSlot.appendChild(cloneUsageRemainingChevron(panel, expanded, metrics));
-      button.appendChild(chevronSlot);
-      addButtonFeedback(button, {
-        normal: { background: "transparent" },
-        hover: { background: "color-mix(in srgb,currentColor 8%,transparent)" },
-        active: {
-          background: "color-mix(in srgb,currentColor 12%,transparent)",
-          transform: prefersReducedMotion() ? "" : "scale(0.96)"
-        }
-      });
-      protectInteractiveControl(button);
-      bindButtonAction(button, () => toggleAccountsExpanded(state, panel, accountState, expanded));
-      return button;
-    }
-    function toggleAccountsExpanded(state, panel, accountState, _ignored) {
-      panel._codexppAccountsCollapsible?.toggle();
-    }
-    function accountsIconSlot() {
-      const slot = document.createElement("span");
-      slot.setAttribute("aria-hidden", "true");
-      slot.style.cssText = "position:absolute;left:var(--codexpp-menu-icon-left,24px);top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;height:24px;width:var(--codexpp-menu-icon-slot-width,24px);color:var(--color-token-text-secondary,var(--color-token-text-tertiary,currentColor));";
-      slot.appendChild(accountsIcon());
-      return slot;
-    }
-    function accountsIcon() {
-      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("data-codexpp-accounts-icon", "");
-      svg.setAttribute("viewBox", "0 0 24 24");
-      svg.setAttribute("width", "18");
-      svg.setAttribute("height", "18");
-      svg.setAttribute("fill", "none");
-      svg.setAttribute("stroke", "currentColor");
-      svg.setAttribute("stroke-width", "2");
-      svg.setAttribute("stroke-linecap", "round");
-      svg.setAttribute("stroke-linejoin", "round");
-      svg.style.display = "block";
-      svg.style.color = "inherit";
-      for (const [tagName, attrs] of [
-        ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
-        ["circle", { cx: "9", cy: "7", r: "4" }],
-        ["path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }],
-        ["path", { d: "M16 3.13a4 4 0 0 1 0 7.75" }]
-      ]) {
-        const child = document.createElementNS("http://www.w3.org/2000/svg", tagName);
-        for (const [name, value] of Object.entries(attrs)) {
-          child.setAttribute(name, value);
-        }
-        svg.appendChild(child);
-      }
-      return svg;
-    }
-    function cloneUsageRemainingChevron(panel, expanded, metrics) {
-      const reference = findNativeCollapsibleReference(panel);
-      const size = metrics?.chevronSize || ACCOUNTS_CHEVRON_SIZE;
-      if (reference?.chevron) {
-        const clone = reference.chevron.cloneNode(true);
-        return prepareChevronSvg(clone, expanded, size);
-      }
-      return prepareChevronSvg(accountsChevronIcon(), expanded, size);
-    }
-    function prepareChevronSvg(svg, expanded, size) {
-      svg.setAttribute("aria-hidden", "true");
-      svg.setAttribute("focusable", "false");
-      svg.setAttribute("width", size || ACCOUNTS_CHEVRON_SIZE);
-      svg.setAttribute("height", size || ACCOUNTS_CHEVRON_SIZE);
-      normalizeChevronPaint(svg);
-      svg.style.color = "inherit";
-      svg.style.display = "block";
-      svg.style.flex = "0 0 auto";
-      svg.style.visibility = "visible";
-      svg.style.transform = accountsChevronTransform(expanded);
-      svg.style.transformOrigin = "center";
-      svg.style.transition = `transform ${accountsPanelDuration(true)}ms ${ACCOUNTS_PANEL_EASING}`;
-      return svg;
-    }
-    function normalizeChevronPaint(svg) {
-      const painted = [svg, ...svg.querySelectorAll("[stroke], [fill]")];
-      for (const element of painted) {
-        const stroke = element.getAttribute("stroke");
-        if (stroke && stroke !== "none") element.setAttribute("stroke", "currentColor");
-        const fill = element.getAttribute("fill");
-        if (fill && fill !== "none") element.setAttribute("fill", "currentColor");
-        element.style.color = "inherit";
-        element.style.opacity = "1";
-      }
-    }
-    function accountsChevronIcon() {
-      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("data-codexpp-accounts-chevron-fallback", "");
-      svg.setAttribute("viewBox", "0 0 24 24");
-      svg.setAttribute("fill", "none");
-      svg.setAttribute("stroke", "currentColor");
-      svg.setAttribute("stroke-width", "2");
-      svg.setAttribute("stroke-linecap", "round");
-      svg.setAttribute("stroke-linejoin", "round");
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", "m9 18 6-6-6-6");
-      svg.appendChild(path);
-      return svg;
-    }
-    function nativeCollapsibleMetrics(panel) {
-      const fallback = {
-        chevronColor: ACCOUNTS_CHEVRON_COLOR,
-        chevronOpacity: "1",
-        chevronMarginRight: "0px",
-        chevronSlotWidth: "20px"
-      };
-      const reference = findNativeCollapsibleReference(panel);
-      if (!reference?.row || typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
-        return fallback;
-      }
-      const rowStyle = window.getComputedStyle(reference.row);
-      const chevronStyle = reference.chevron ? window.getComputedStyle(reference.chevron) : null;
-      const chevronRect = reference.chevron && typeof reference.chevron.getBoundingClientRect === "function" ? reference.chevron.getBoundingClientRect() : null;
-      const rowRect = typeof reference.row.getBoundingClientRect === "function" ? reference.row.getBoundingClientRect() : null;
-      const paddingRight = parseCssPixels(rowStyle.paddingRight);
-      const chevronWidth = chevronRect?.width > 0 ? chevronRect.width : Number.parseFloat(ACCOUNTS_CHEVRON_SIZE);
-      const slotWidth = Math.max(20, Math.round(chevronWidth));
-      const rightInset = rowRect && chevronRect?.width > 0 ? rowRect.right - chevronRect.right : paddingRight;
-      const opticalInset = (slotWidth - chevronWidth) / 2;
-      const marginRight = Number.isFinite(rightInset) && Number.isFinite(paddingRight) ? Math.round(rightInset - paddingRight - opticalInset) : 0;
-      const color = ACCOUNTS_CHEVRON_COLOR;
-      const opacity = fallback.chevronOpacity;
-      const chevronSize = String(Math.round(chevronWidth));
-      return {
-        chevronColor: color,
-        chevronOpacity: opacity,
-        chevronMarginRight: `${marginRight}px`,
-        chevronSlotWidth: `${slotWidth}px`,
-        chevronSize
-      };
-    }
-    function findNativeCollapsibleReference(panel) {
-      return findNativeCollapsibleRow(panel, /\busage remaining\b/i) || findNativeCollapsibleRow(panel, /\brate limits/i);
-    }
-    function findNativeCollapsibleRow(panel, pattern) {
-      const menu = panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') || document;
-      const row = Array.from(menu.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
-        return element instanceof HTMLElement && pattern.test(element.textContent || "");
-      });
-      if (!(row instanceof HTMLElement)) return null;
-      const icons = Array.from(row.querySelectorAll("svg"));
-      const chevron = icons.length ? icons[icons.length - 1] : null;
-      return { row, chevron };
-    }
-    function parseCssPixels(value) {
-      const parsed = Number.parseFloat(value);
-      return Number.isFinite(parsed) ? parsed : 0;
-    }
-    function accountRow(state, panel, accountState, name) {
+    function accountRow(accountState, name, onSwitch) {
       const row = document.createElement("button");
       row.type = "button";
       row.title = accountDisplayName(accountState, name, { includeCurrent: false });
@@ -2121,7 +1649,7 @@ var require_ui_popup = __commonJS({
       protectInteractiveControl(row);
       bindButtonAction(row, () => {
         if (accountState.current === name) return;
-        void runPanelAction(state, panel, "switch", { name }, t2("accounts.switching"));
+        onSwitch(name);
       });
       return row;
     }
@@ -2255,6 +1783,526 @@ var require_ui_popup = __commonJS({
       element.style.cssText = styles.join(";");
       return element;
     }
+    module2.exports = { accountRow };
+  }
+});
+
+// src/action-messages.js
+var require_action_messages = __commonJS({
+  "src/action-messages.js"(exports2, module2) {
+    var { t: t2 } = require_i18n();
+    var { accountDisplayName } = require_ui_components();
+    function authReloadMessage(action, accountState) {
+      if (action === "clear-active") {
+        return t2("accounts.sessionClearedRelaunching");
+      }
+      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : t2("accounts.selected");
+      return t2("accounts.switchedRelaunching", { email });
+    }
+    module2.exports = { authReloadMessage };
+  }
+});
+
+// src/ui-settings.js
+var require_ui_settings = __commonJS({
+  "src/ui-settings.js"(exports2, module2) {
+    var { errorMessage } = require_utils();
+    var { invoke } = require_ipc();
+    var { t: t2 } = require_i18n();
+    var { refreshUsageInBackground } = require_usage_refresh();
+    var { authReloadMessage } = require_action_messages();
+    var {
+      settingsButton,
+      settingsSection,
+      settingsCard,
+      settingsRowShell,
+      settingsInfoRow,
+      settingsActionRow,
+      settingsStatus,
+      accountDisplayName,
+      accountUsageSummary,
+      bindButtonAction
+    } = require_ui_components();
+    async function renderAccountsPage(state, root) {
+      root.textContent = "";
+      root.appendChild(settingsStatus(t2("accounts.loading")));
+      try {
+        const accountState = await invoke(state, "state");
+        renderAccountsPageState(state, root, accountState);
+        refreshUsageInBackground(state, (freshState) => {
+          if (root.isConnected) renderAccountsPageState(state, root, freshState);
+        });
+      } catch (error) {
+        root.textContent = "";
+        root.appendChild(settingsStatus(errorMessage(error), true));
+      }
+    }
+    function renderAccountsPageState(state, root, accountState) {
+      root.textContent = "";
+      const intro = settingsSection(t2("settings.activeSession"));
+      const introCard = settingsCard();
+      const currentName = accountState.current || (accountState.hasActiveAuth ? t2("settings.unsavedAccount") : t2("settings.noActiveSession"));
+      const currentValue = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : currentName;
+      introCard.appendChild(
+        settingsInfoRow(
+          t2("settings.signedInAs"),
+          currentValue,
+          accountState.hasActiveAuth ? t2("settings.activeAuthDescription") : t2("settings.noAuthDescription")
+        )
+      );
+      intro.appendChild(introCard);
+      root.appendChild(intro);
+      const actions = settingsSection(t2("settings.accountSetup"));
+      const actionCard = settingsCard();
+      actionCard.appendChild(
+        settingsActionRow(
+          t2("settings.signInAnother"),
+          t2("settings.signInAnotherDescription"),
+          t2("settings.startSignIn"),
+          () => clearActiveFromSettings(state, root)
+        )
+      );
+      actionCard.appendChild(
+        settingsActionRow(
+          t2("settings.refreshSaved"),
+          t2("settings.refreshSavedDescription"),
+          t2("settings.refresh"),
+          () => renderAccountsPage(state, root)
+        )
+      );
+      actions.appendChild(actionCard);
+      root.appendChild(actions);
+      const saved = settingsSection(t2("settings.savedAccounts"));
+      const savedCard = settingsCard();
+      const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
+      if (!accounts.length) {
+        savedCard.appendChild(
+          settingsInfoRow(
+            t2("settings.noSavedAccounts"),
+            t2("settings.noneFound"),
+            t2("settings.noSavedAccountsDescription")
+          )
+        );
+      } else {
+        for (const name of accounts) {
+          savedCard.appendChild(settingsAccountRow(state, root, accountState, name));
+        }
+      }
+      saved.appendChild(savedCard);
+      root.appendChild(saved);
+      if (accountState.notice || accountState.error) {
+        root.appendChild(settingsStatus(accountState.notice || accountState.error, !!accountState.error));
+      }
+    }
+    function settingsAccountRow(state, root, accountState, name) {
+      const row = settingsRowShell();
+      const left = document.createElement("div");
+      left.className = "flex min-w-0 flex-col gap-1";
+      const title = document.createElement("div");
+      title.className = "min-w-0 truncate text-sm text-token-text-primary";
+      title.textContent = accountDisplayName(accountState, name);
+      title.title = accountDisplayName(accountState, name, { includeCurrent: false });
+      left.appendChild(title);
+      const desc = document.createElement("div");
+      desc.className = "text-token-text-secondary min-w-0 text-sm";
+      desc.textContent = accountUsageSummary(accountState, name) || (accountState.current === name ? t2("settings.activeInWindow") : t2("settings.usageUnchecked"));
+      left.appendChild(desc);
+      row.appendChild(left);
+      const actionsEl = document.createElement("div");
+      actionsEl.className = "flex shrink-0 items-center gap-2";
+      const switchButton = settingsButton(t2("settings.switch"));
+      switchButton.disabled = accountState.current === name;
+      bindButtonAction(
+        switchButton,
+        () => runSettingsAction(state, root, "switch", { name }, t2("accounts.switching"))
+      );
+      actionsEl.appendChild(switchButton);
+      const removeButton = settingsButton(t2("settings.delete"));
+      bindButtonAction(removeButton, () => {
+        runSettingsAction(state, root, "delete", { name }, t2("settings.removing"));
+      });
+      actionsEl.appendChild(removeButton);
+      row.appendChild(actionsEl);
+      return row;
+    }
+    function clearActiveFromSettings(state, root) {
+      runSettingsAction(state, root, "clear-active", {}, t2("accounts.preparingSignIn"));
+    }
+    async function runSettingsAction(state, root, action, payload, loadingText) {
+      root.textContent = "";
+      root.appendChild(settingsStatus(loadingText));
+      try {
+        const accountState = await invoke(state, action, payload);
+        if (action === "switch" || action === "clear-active") {
+          root.textContent = "";
+          root.appendChild(settingsStatus(authReloadMessage(action, accountState)));
+          scheduleAppRelaunch(state, root);
+          return;
+        }
+        renderAccountsPageState(state, root, accountState);
+      } catch (error) {
+        renderAccountsPageState(state, root, {
+          ...state.lastState || { accounts: [], current: null, hasActiveAuth: false },
+          error: errorMessage(error)
+        });
+      }
+    }
+    function scheduleAppRelaunch(state, root) {
+      window.setTimeout(() => {
+        invoke(state, "relaunch").catch((error) => {
+          root.textContent = "";
+          root.appendChild(settingsStatus(t2("accounts.relaunchFailed", { error: errorMessage(error) }), true));
+        });
+      }, 1200);
+    }
+    module2.exports = {
+      renderAccountsPage,
+      renderAccountsPageState
+    };
+  }
+});
+
+// src/ui-collapsible.js
+var require_ui_collapsible = __commonJS({
+  "src/ui-collapsible.js"(exports2, module2) {
+    var { prefersReducedMotion } = require_ui_components();
+    var ACCOUNTS_PANEL_TRANSITION_MS = 300;
+    var ACCOUNTS_PANEL_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
+    var ACCOUNTS_CHEVRON_COLLAPSED = "rotate(0deg)";
+    var ACCOUNTS_CHEVRON_EXPANDED = "rotate(90deg)";
+    var ACCOUNTS_BODY_COLLAPSED_TRANSFORM = "translateY(-2px)";
+    var ACCOUNTS_BODY_EXPANDED_TRANSFORM = "translateY(0)";
+    function accountsPanelDuration() {
+      if (prefersReducedMotion()) return 0;
+      return ACCOUNTS_PANEL_TRANSITION_MS;
+    }
+    function accountsBodyTransition(duration) {
+      return `max-height ${duration}ms ${ACCOUNTS_PANEL_EASING},opacity ${duration}ms ${ACCOUNTS_PANEL_EASING},transform ${duration}ms ${ACCOUNTS_PANEL_EASING}`;
+    }
+    function accountsChevronTransform(expanded) {
+      return expanded ? ACCOUNTS_CHEVRON_EXPANDED : ACCOUNTS_CHEVRON_COLLAPSED;
+    }
+    function accountsBodyCss(expanded) {
+      return [
+        "overflow:hidden",
+        "max-height:0",
+        "opacity:0",
+        `transform:${expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM}`,
+        `pointer-events:${expanded ? "auto" : "none"}`,
+        `transition:${expanded ? "none" : accountsBodyTransition(ACCOUNTS_PANEL_TRANSITION_MS)}`
+      ].join(";");
+    }
+    function createAccountsCollapsible(state, elements, expanded) {
+      applyAccountsExpanded(state, elements, expanded, { animate: false });
+      if (expanded && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => {
+          if (elements.body.isConnected) {
+            elements.body.style.transition = accountsBodyTransition(accountsPanelDuration());
+          }
+        });
+      }
+      return {
+        toggle() {
+          applyAccountsExpanded(state, elements, !state.accountsExpanded, { animate: true });
+        },
+        collapse() {
+          applyAccountsExpanded(state, elements, false, { animate: true });
+        }
+      };
+    }
+    function applyAccountsExpanded(state, elements, expanded, options) {
+      state.accountsExpanded = expanded;
+      const duration = options.animate ? accountsPanelDuration() : 0;
+      if (options.animate) {
+        elements.body.style.transition = accountsBodyTransition(duration);
+      }
+      elements.body.style.pointerEvents = expanded ? "auto" : "none";
+      elements.body.style.maxHeight = expanded ? elements.body.scrollHeight + "px" : "0";
+      elements.body.style.opacity = expanded ? "1" : "0";
+      elements.body.style.transform = expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM;
+      elements.header.setAttribute("aria-expanded", String(expanded));
+      if (elements.chevron) {
+        elements.chevron.style.transitionDuration = duration + "ms";
+        elements.chevron.style.transform = accountsChevronTransform(expanded);
+      }
+      for (const note of elements.notes) {
+        note.style.display = expanded ? "block" : "none";
+      }
+    }
+    module2.exports = {
+      ACCOUNTS_PANEL_EASING,
+      ACCOUNTS_PANEL_TRANSITION_MS,
+      accountsBodyCss,
+      accountsBodyTransition,
+      accountsChevronTransform,
+      accountsPanelDuration,
+      createAccountsCollapsible
+    };
+  }
+});
+
+// src/ui-popup.js
+var require_ui_popup = __commonJS({
+  "src/ui-popup.js"(exports2, module2) {
+    var { errorMessage } = require_utils();
+    var { invoke } = require_ipc();
+    var { t: t2 } = require_i18n();
+    var { protectInteractiveControl } = require_dom_utils();
+    var { refreshUsageInBackground } = require_usage_refresh();
+    var { accountRow } = require_ui_account_row();
+    var { authReloadMessage } = require_action_messages();
+    var { renderAccountsPageState } = require_ui_settings();
+    var {
+      accountPanelShell,
+      setPanelStatus,
+      addButtonFeedback,
+      bindButtonAction,
+      prefersReducedMotion
+    } = require_ui_components();
+    var {
+      ACCOUNTS_PANEL_EASING,
+      accountsBodyCss,
+      accountsChevronTransform,
+      accountsPanelDuration,
+      createAccountsCollapsible
+    } = require_ui_collapsible();
+    var ACCOUNTS_CHEVRON_SIZE = "16";
+    var ACCOUNTS_CHEVRON_COLOR = "#5C5B56";
+    var ACCOUNTS_COLLAPSIBLE_KEY = "__codexppAccountsCollapsible";
+    function renderAccountPanel(state, panel, accountState) {
+      panel.textContent = "";
+      panel.setAttribute("data-codexpp-account-switcher", "panel");
+      const accounts = Array.isArray(accountState.accounts) ? accountState.accounts : [];
+      const expanded = state.accountsExpanded === true;
+      const section = document.createElement("div");
+      section.style.cssText = "display:flex;flex-direction:column;padding:0;";
+      const header = accountsHeaderRow(state, panel, accountState, expanded);
+      section.appendChild(header);
+      const list = document.createElement("div");
+      list.style.cssText = "display:flex;flex-direction:column;min-width:0;gap:1px;padding:2px 0 4px;";
+      if (accounts.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = accountState.hasActiveAuth ? t2("accounts.emptySaved") : t2("accounts.emptyActive");
+        empty.style.cssText = "font-size:12px;color:var(--color-token-text-secondary,currentColor);padding:2px var(--codexpp-menu-row-padding-right,24px) 4px var(--codexpp-menu-text-inset,64px);";
+        list.appendChild(empty);
+      }
+      for (const name of accounts) {
+        list.appendChild(accountRow(accountState, name, (accountName) => {
+          void runPanelAction(state, panel, "switch", { name: accountName }, t2("accounts.switching"));
+        }));
+      }
+      list.appendChild(configureAccountsRow(state, panel));
+      const body = document.createElement("div");
+      body.setAttribute("data-codexpp-account-switcher-body", "accounts");
+      body.style.cssText = accountsBodyCss(expanded);
+      const bodyInner = document.createElement("div");
+      bodyInner.style.cssText = "min-height:0;";
+      bodyInner.appendChild(list);
+      body.appendChild(bodyInner);
+      section.appendChild(body);
+      panel.appendChild(section);
+      const notes = [];
+      if (accountState.notice || accountState.error) {
+        const note = document.createElement("div");
+        note.setAttribute("data-codexpp-account-switcher-notice", "");
+        note.textContent = accountState.notice || accountState.error;
+        note.style.cssText = "padding:0 var(--codexpp-menu-row-padding-right,24px) 6px var(--codexpp-menu-text-inset,64px);font-size:11px;line-height:1.3;color:" + (accountState.error ? "var(--color-token-text-error,#ff6b6b)" : "var(--color-token-text-secondary,currentColor)") + ";";
+        if (expanded) note.style.display = "block";
+        else note.style.display = "none";
+        notes.push(note);
+        panel.appendChild(note);
+      }
+      panel[ACCOUNTS_COLLAPSIBLE_KEY] = createAccountsCollapsible(
+        state,
+        {
+          body,
+          header,
+          chevron: header.querySelector("[data-accounts-chevron] svg"),
+          notes
+        },
+        expanded
+      );
+    }
+    function accountsHeaderRow(state, panel, accountState, expanded) {
+      const metrics = nativeCollapsibleMetrics(panel);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("aria-expanded", expanded ? "true" : "false");
+      button.style.cssText = [
+        "width:100%",
+        "border:0",
+        "background:transparent",
+        "color:var(--color-token-text-primary,currentColor)",
+        "font:inherit",
+        "font-size:13px",
+        "line-height:1.25",
+        "text-align:left",
+        "border-radius:var(--codexpp-menu-row-radius,8px)",
+        "min-height:var(--codexpp-menu-row-height,40px)",
+        "padding:var(--codexpp-menu-row-padding-top,0) var(--codexpp-menu-row-padding-right,24px) var(--codexpp-menu-row-padding-bottom,0) var(--codexpp-menu-text-inset,64px)",
+        "position:relative",
+        "cursor:default",
+        "display:flex",
+        "align-items:center",
+        "gap:0"
+      ].join(";");
+      button.appendChild(accountsIconSlot());
+      const title = document.createElement("span");
+      title.textContent = t2("accounts.title");
+      title.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;";
+      button.appendChild(title);
+      const chevronSlot = document.createElement("span");
+      chevronSlot.setAttribute("data-accounts-chevron", "");
+      chevronSlot.style.cssText = `display:flex;align-items:center;justify-content:center;width:${metrics.chevronSlotWidth};height:20px;margin-left:auto;margin-right:${metrics.chevronMarginRight};flex:0 0 ${metrics.chevronSlotWidth};color:${metrics.chevronColor};opacity:${metrics.chevronOpacity};`;
+      chevronSlot.appendChild(cloneUsageRemainingChevron(panel, expanded, metrics));
+      button.appendChild(chevronSlot);
+      addButtonFeedback(button, {
+        normal: { background: "transparent" },
+        hover: { background: "color-mix(in srgb,currentColor 8%,transparent)" },
+        active: {
+          background: "color-mix(in srgb,currentColor 12%,transparent)",
+          transform: prefersReducedMotion() ? "" : "scale(0.96)"
+        }
+      });
+      protectInteractiveControl(button);
+      bindButtonAction(button, () => toggleAccountsExpanded(panel));
+      return button;
+    }
+    function toggleAccountsExpanded(panel) {
+      panel[ACCOUNTS_COLLAPSIBLE_KEY]?.toggle();
+    }
+    function accountsIconSlot() {
+      const slot = document.createElement("span");
+      slot.setAttribute("aria-hidden", "true");
+      slot.style.cssText = "position:absolute;left:var(--codexpp-menu-icon-left,24px);top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;height:24px;width:var(--codexpp-menu-icon-slot-width,24px);color:var(--color-token-text-secondary,var(--color-token-text-tertiary,currentColor));";
+      slot.appendChild(accountsIcon());
+      return slot;
+    }
+    function accountsIcon() {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("data-codexpp-accounts-icon", "");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("width", "18");
+      svg.setAttribute("height", "18");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.style.display = "block";
+      svg.style.color = "inherit";
+      for (const [tagName, attrs] of [
+        ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
+        ["circle", { cx: "9", cy: "7", r: "4" }],
+        ["path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }],
+        ["path", { d: "M16 3.13a4 4 0 0 1 0 7.75" }]
+      ]) {
+        const child = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+        for (const [name, value] of Object.entries(attrs)) {
+          child.setAttribute(name, value);
+        }
+        svg.appendChild(child);
+      }
+      return svg;
+    }
+    function cloneUsageRemainingChevron(panel, expanded, metrics) {
+      const reference = findNativeCollapsibleReference(panel);
+      const size = metrics?.chevronSize || ACCOUNTS_CHEVRON_SIZE;
+      if (reference?.chevron) {
+        const clone = reference.chevron.cloneNode(true);
+        return prepareChevronSvg(clone, expanded, size);
+      }
+      return prepareChevronSvg(accountsChevronIcon(), expanded, size);
+    }
+    function prepareChevronSvg(svg, expanded, size) {
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+      svg.setAttribute("width", size || ACCOUNTS_CHEVRON_SIZE);
+      svg.setAttribute("height", size || ACCOUNTS_CHEVRON_SIZE);
+      normalizeChevronPaint(svg);
+      svg.style.color = "inherit";
+      svg.style.display = "block";
+      svg.style.flex = "0 0 auto";
+      svg.style.visibility = "visible";
+      svg.style.transform = accountsChevronTransform(expanded);
+      svg.style.transformOrigin = "center";
+      svg.style.transition = `transform ${accountsPanelDuration(true)}ms ${ACCOUNTS_PANEL_EASING}`;
+      return svg;
+    }
+    function normalizeChevronPaint(svg) {
+      const painted = [svg, ...svg.querySelectorAll("[stroke], [fill]")];
+      for (const element of painted) {
+        const stroke = element.getAttribute("stroke");
+        if (stroke && stroke !== "none") element.setAttribute("stroke", "currentColor");
+        const fill = element.getAttribute("fill");
+        if (fill && fill !== "none") element.setAttribute("fill", "currentColor");
+        element.style.color = "inherit";
+        element.style.opacity = "1";
+      }
+    }
+    function accountsChevronIcon() {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("data-codexpp-accounts-chevron-fallback", "");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "m9 18 6-6-6-6");
+      svg.appendChild(path);
+      return svg;
+    }
+    function nativeCollapsibleMetrics(panel) {
+      const fallback = {
+        chevronColor: ACCOUNTS_CHEVRON_COLOR,
+        chevronOpacity: "1",
+        chevronMarginRight: "0px",
+        chevronSlotWidth: "20px"
+      };
+      const reference = findNativeCollapsibleReference(panel);
+      if (!reference?.row || typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
+        return fallback;
+      }
+      const rowStyle = window.getComputedStyle(reference.row);
+      const chevronStyle = reference.chevron ? window.getComputedStyle(reference.chevron) : null;
+      const chevronRect = reference.chevron && typeof reference.chevron.getBoundingClientRect === "function" ? reference.chevron.getBoundingClientRect() : null;
+      const rowRect = typeof reference.row.getBoundingClientRect === "function" ? reference.row.getBoundingClientRect() : null;
+      const paddingRight = parseCssPixels(rowStyle.paddingRight);
+      const chevronWidth = chevronRect?.width > 0 ? chevronRect.width : Number.parseFloat(ACCOUNTS_CHEVRON_SIZE);
+      const slotWidth = Math.max(20, Math.round(chevronWidth));
+      const rightInset = rowRect && chevronRect?.width > 0 ? rowRect.right - chevronRect.right : paddingRight;
+      const opticalInset = (slotWidth - chevronWidth) / 2;
+      const marginRight = Number.isFinite(rightInset) && Number.isFinite(paddingRight) ? Math.round(rightInset - paddingRight - opticalInset) : 0;
+      const color = ACCOUNTS_CHEVRON_COLOR;
+      const opacity = fallback.chevronOpacity;
+      const chevronSize = String(Math.round(chevronWidth));
+      return {
+        chevronColor: color,
+        chevronOpacity: opacity,
+        chevronMarginRight: `${marginRight}px`,
+        chevronSlotWidth: `${slotWidth}px`,
+        chevronSize
+      };
+    }
+    function findNativeCollapsibleReference(panel) {
+      return findNativeCollapsibleRow(panel, /\busage remaining\b/i) || findNativeCollapsibleRow(panel, /\brate limits/i);
+    }
+    function findNativeCollapsibleRow(panel, pattern) {
+      const menu = panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') || document;
+      const row = Array.from(menu.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
+        return element instanceof HTMLElement && pattern.test(element.textContent || "");
+      });
+      if (!(row instanceof HTMLElement)) return null;
+      const icons = Array.from(row.querySelectorAll("svg"));
+      const chevron = icons.length ? icons[icons.length - 1] : null;
+      return { row, chevron };
+    }
+    function parseCssPixels(value) {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
     function configureAccountsRow(state, panel) {
       const button = document.createElement("button");
       button.type = "button";
@@ -2275,7 +2323,7 @@ var require_ui_popup = __commonJS({
     function openAccountsSettings(state, panel) {
       const menu = panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') || document;
       const settingsItem = findMenuCommand(menu, /settings/i);
-      panel._codexppAccountsCollapsible?.collapse();
+      panel[ACCOUNTS_COLLAPSIBLE_KEY]?.collapse();
       settingsItem?.click();
       window.setTimeout(() => {
         const accountsNav = Array.from(
@@ -2313,38 +2361,20 @@ var require_ui_popup = __commonJS({
         });
       }
     }
-    function authReloadMessage(action, accountState) {
-      if (action === "clear-active") {
-        return t2("accounts.sessionClearedRelaunching");
-      }
-      const email = accountState.current ? accountDisplayName(accountState, accountState.current, { includeCurrent: false }) : t2("accounts.selected");
-      return t2("accounts.switchedRelaunching", { email });
-    }
     async function refreshPanel(state, panel) {
       setPanelStatus(panel, t2("accounts.loading"));
       try {
         const accountState = await invoke(state, "state");
         renderAccountPanel(state, panel, accountState);
-        refreshUsageInBackground(state, panel);
+        refreshUsageInBackground(state, (freshState) => {
+          if (panel.isConnected) renderAccountPanel(state, panel, freshState);
+          if (state.settingsRoot?.isConnected) {
+            renderAccountsPageState(state, state.settingsRoot, freshState);
+          }
+        });
       } catch (error) {
         setPanelStatus(panel, errorMessage(error));
       }
-    }
-    function refreshUsageInBackground(state, panel) {
-      const now = Date.now();
-      if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < 6e4) return;
-      state.usageRefreshInFlight = true;
-      state.lastUsageRefreshAt = now;
-      invoke(state, "refresh-usage").then((accountState) => {
-        if (panel.isConnected) renderAccountPanel(state, panel, accountState);
-        if (state.settingsRoot?.isConnected) {
-          renderAccountsPageState(state, state.settingsRoot, accountState);
-        }
-      }).catch((error) => {
-        state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
-      }).finally(() => {
-        state.usageRefreshInFlight = false;
-      });
     }
     module2.exports = { renderAccountPanel, accountPanelShell, refreshPanel };
   }

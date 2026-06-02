@@ -8,7 +8,11 @@ const {
   pathExists,
 } = require("../node-utils");
 const { readState } = require("./state");
-const { getCurrentAccountName, listAccountNames } = require("./storage");
+const {
+  ensureAutosavedActiveAccount,
+  getCurrentAccountName,
+  listAccountNames,
+} = require("./storage");
 const { fetchActiveUsageSnapshot, writeAccountUsage } = require("./usage");
 const {
   readAuthJson,
@@ -42,6 +46,7 @@ async function switchAccount(rawName, api) {
   const source = accountPath(name);
   if (!(await pathExists(source))) throw new Error(`Saved account not found: ${name}`);
   await ensureDir(CODEX_DIR);
+  await ensureAutosavedActiveAccount();
   try {
     const account = await readAuthJson(source, `Saved account ${name}`);
     await syncOpenAIBaseUrlForAccount(account);

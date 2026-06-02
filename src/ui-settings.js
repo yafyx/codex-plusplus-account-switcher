@@ -1,6 +1,8 @@
 const { errorMessage } = require("./utils");
 const { invoke } = require("./ipc");
 const { t } = require("./i18n");
+const { refreshUsageInBackground } = require("./usage-refresh");
+const { authReloadMessage } = require("./action-messages");
 const {
   settingsButton,
   settingsSection,
@@ -22,7 +24,9 @@ async function renderAccountsPage(state, root) {
   try {
     const accountState = await invoke(state, "state");
     renderAccountsPageState(state, root, accountState);
-    refreshUsageInBackground(state, root);
+    refreshUsageInBackground(state, (freshState) => {
+      if (root.isConnected) renderAccountsPageState(state, root, freshState);
+    });
   } catch (error) {
     root.textContent = "";
     root.appendChild(settingsStatus(errorMessage(error), true));
@@ -146,23 +150,6 @@ function clearActiveFromSettings(state, root) {
   runSettingsAction(state, root, "clear-active", {}, t("accounts.preparingSignIn"));
 }
 
-function refreshUsageInBackground(state, root) {
-  const now = Date.now();
-  if (state.usageRefreshInFlight || now - (state.lastUsageRefreshAt || 0) < 60_000) return;
-  state.usageRefreshInFlight = true;
-  state.lastUsageRefreshAt = now;
-  invoke(state, "refresh-usage")
-    .then((accountState) => {
-      if (root.isConnected) renderAccountsPageState(state, root, accountState);
-    })
-    .catch((error) => {
-      state.api.log.warn("[account-switcher] usage refresh failed", errorMessage(error));
-    })
-    .finally(() => {
-      state.usageRefreshInFlight = false;
-    });
-}
-
 async function runSettingsAction(state, root, action, payload, loadingText) {
   root.textContent = "";
   root.appendChild(settingsStatus(loadingText));
@@ -181,16 +168,6 @@ async function runSettingsAction(state, root, action, payload, loadingText) {
       error: errorMessage(error),
     });
   }
-}
-
-function authReloadMessage(action, accountState) {
-  if (action === "clear-active") {
-    return t("accounts.sessionClearedRelaunching");
-  }
-  const email = accountState.current
-    ? accountDisplayName(accountState, accountState.current, { includeCurrent: false })
-    : t("accounts.selected");
-  return t("accounts.switchedRelaunching", { email });
 }
 
 function scheduleAppRelaunch(state, root) {

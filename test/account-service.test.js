@@ -26,6 +26,18 @@ function authWithEmail(email, extra = {}) {
   return authWithClaims({ email }, null, extra);
 }
 
+function authWithEmailRefresh(email, refreshToken, extra = {}) {
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    ...extra,
+    tokens: {
+      id_token: unsignedToken({ email }),
+      access_token: `access-${refreshToken}`,
+      refresh_token: refreshToken,
+    },
+  });
+}
+
 function authWithPlan(email, plan, extra = {}) {
   return authWithClaims(
     {
@@ -268,6 +280,53 @@ test("switch schedules detached macOS reopen from the main-process action", asyn
       "unref",
       "exit:0",
     ]);
+  });
+});
+
+test("switch saves rotated active auth before overwriting auth.json", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    const staleWorkAuth = authWithEmailRefresh("work@example.com", "already-used");
+    const freshWorkAuth = authWithEmailRefresh("work@example.com", "fresh-rotation");
+    const otherAuth = authWithEmailRefresh("other@example.com", "other-refresh");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), staleWorkAuth);
+    await fs.writeFile(path.join(accountsDir, "other.json"), otherAuth);
+    await fs.writeFile(path.join(codexDir, "auth.json"), freshWorkAuth);
+    await fs.writeFile(path.join(codexDir, "current_account"), "work\n");
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
+    const result = await service.handle({ action: "switch", name: "other" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "auth.json"), "utf8"), otherAuth);
+    assert.equal(await fs.readFile(path.join(accountsDir, "work.json"), "utf8"), freshWorkAuth);
+    assert.equal((await fs.readFile(path.join(codexDir, "current_account"), "utf8")).trim(), "other");
+  });
+});
+
+test("switch refreshes selected saved auth when active auth has the same email", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    const staleAuth = authWithEmailRefresh("third@example.com", "already-used");
+    const freshAuth = authWithEmailRefresh("third@example.com", "fresh-rotation");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "third.json"), staleAuth);
+    await fs.writeFile(path.join(codexDir, "auth.json"), freshAuth);
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
+    const result = await service.handle({ action: "switch", name: "third" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "auth.json"), "utf8"), freshAuth);
+    assert.equal(await fs.readFile(path.join(accountsDir, "third.json"), "utf8"), freshAuth);
+    assert.equal((await fs.readFile(path.join(codexDir, "current_account"), "utf8")).trim(), "third");
   });
 });
 

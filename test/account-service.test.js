@@ -4,41 +4,49 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-function authWithEmail(email, extra = {}) {
+function unsignedToken(claims) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ email })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${header}.${payload}.`;
+}
+
+function authWithClaims(idClaims, accessClaims = null, extra = {}) {
   return JSON.stringify({
     auth_mode: "chatgpt",
     ...extra,
     tokens: {
-      id_token: `${header}.${payload}.`,
-      access_token: "access",
+      id_token: unsignedToken(idClaims),
+      access_token: accessClaims ? unsignedToken(accessClaims) : "access",
       refresh_token: "refresh",
     },
   });
 }
 
-function restoreEnv(name, value) {
-  if (value === undefined) {
-    delete process.env[name];
-    return;
-  }
-  process.env[name] = value;
+function authWithEmail(email, extra = {}) {
+  return authWithClaims({ email }, null, extra);
+}
+
+function authWithPlan(email, plan, extra = {}) {
+  return authWithClaims(
+    {
+      email,
+      "https://api.openai.com/auth": { chatgpt_plan_type: plan },
+    },
+    null,
+    extra,
+  );
 }
 
 async function withTempHome(fn) {
   const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
-  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
     return await fn(home);
   } finally {
-    restoreEnv("HOME", originalHome);
-    restoreEnv("USERPROFILE", originalUserProfile);
+    process.env.HOME = originalHome;
     await fs.rm(home, { recursive: true, force: true });
   }
 }
@@ -48,21 +56,39 @@ async function touch(filePath, isoDate) {
   await fs.utimes(filePath, date, date);
 }
 
-test("state includes saved account email metadata", async () => {
+function immediateRelaunchApi(calls, overrides = {}) {
+  return {
+    app: {
+      relaunch() {
+        calls.push("relaunch");
+      },
+      exit(code) {
+        calls.push(`exit:${code}`);
+      },
+    },
+    log: { info() {}, warn() {} },
+    setTimeout(callback, delayMs) {
+      calls.push(`delay:${delayMs}`);
+      callback();
+    },
+    ...overrides,
+  };
+}
+
+test("state includes saved account email and plan metadata", async () => {
   const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
-  process.env.USERPROFILE = home;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
     const codexDir = path.join(home, ".codex");
     const accountsDir = path.join(codexDir, "auth_accounts");
     await fs.mkdir(accountsDir, { recursive: true });
-    await fs.writeFile(path.join(accountsDir, "work.json"), authWithEmail("work@example.com"));
-    await fs.writeFile(path.join(accountsDir, "personal.json"), authWithEmail("me@example.com"));
-    await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("work@example.com"));
+    const workAuth = authWithPlan("work@example.com", "plus");
+    await fs.writeFile(path.join(accountsDir, "work.json"), workAuth);
+    await fs.writeFile(path.join(accountsDir, "personal.json"), authWithPlan("me@example.com", "free"));
+    await fs.writeFile(path.join(codexDir, "auth.json"), workAuth);
 
     const { createAccountService } = require("../src/account/service");
     const service = createAccountService({ log: { warn() {} } });
@@ -73,19 +99,49 @@ test("state includes saved account email metadata", async () => {
       personal: "me@example.com",
       work: "work@example.com",
     });
+    assert.deepEqual(result.state.accountPlans, {
+      personal: "free",
+      work: "plus",
+    });
   } finally {
-    restoreEnv("HOME", originalHome);
-    restoreEnv("USERPROFILE", originalUserProfile);
+    process.env.HOME = originalHome;
     await fs.rm(home, { recursive: true, force: true });
   }
 });
 
+test("plan metadata prefers id token and falls back to access token", () => {
+  const { planFromAuth, planFromAuthString } = require("../src/account/auth");
+  const namespace = (plan) => ({ "https://api.openai.com/auth": { chatgpt_plan_type: plan } });
+
+  assert.equal(
+    planFromAuth({
+      tokens: {
+        id_token: unsignedToken(namespace("PLUS")),
+        access_token: unsignedToken(namespace("free")),
+      },
+    }),
+    "plus",
+  );
+  assert.equal(
+    planFromAuth({
+      tokens: {
+        id_token: "malformed",
+        access_token: unsignedToken(namespace("free")),
+      },
+    }),
+    "free",
+  );
+  assert.equal(planFromAuth({ tokens: { id_token: "malformed", access_token: "malformed" } }), null);
+  assert.equal(planFromAuth({ tokens: { id_token: unsignedToken({ email: "work@example.com" }) } }), null);
+  assert.equal(planFromAuthString("{not-json"), null);
+});
+
 test("state includes cached account usage metadata", async () => {
   const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
+  const originalNow = Date.now;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
-  process.env.USERPROFILE = home;
+  Date.now = () => 1777728300000;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
@@ -112,24 +168,24 @@ test("state includes cached account usage metadata", async () => {
     assert.equal(result.ok, true);
     assert.deepEqual(result.state.accountUsage, {
       work: {
-        fiveHour: { label: "5h", pct: 72, resetAt: "8:30 PM" },
-        weekly: { label: "Weekly", pct: 91, resetAt: "Sat, 6:00 PM" },
+        fiveHour: { label: "5h", pct: 72, resetAt: "8:30 PM", resetAtMs: 1777728600000 },
+        weekly: { label: "Weekly", pct: 91, resetAt: "Sat, 6:00 PM", resetAtMs: 1778324400000 },
         at: 1777728000000,
       },
     });
   } finally {
-    restoreEnv("HOME", originalHome);
-    restoreEnv("USERPROFILE", originalUserProfile);
+    Date.now = originalNow;
+    process.env.HOME = originalHome;
     await fs.rm(home, { recursive: true, force: true });
   }
 });
 
 test("refresh-usage stores active account usage", async () => {
   const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
+  const originalNow = Date.now;
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-account-switcher-"));
   process.env.HOME = home;
-  process.env.USERPROFILE = home;
+  Date.now = () => 1777729300000;
   delete require.cache[require.resolve("../src/account/service")];
 
   try {
@@ -152,19 +208,190 @@ test("refresh-usage stores active account usage", async () => {
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.state.accountUsage.work, {
-      fiveHour: { label: "5h", pct: 64, resetAt: "9:00 PM" },
-      weekly: { label: "Weekly", pct: 88, resetAt: "Sun, 6:00 PM" },
+      fiveHour: { label: "5h", pct: 64, resetAt: "9:00 PM", resetAtMs: 1777730400000 },
+      weekly: { label: "Weekly", pct: 88, resetAt: "Sun, 6:00 PM", resetAtMs: 1777806000000 },
       at: 1777729000000,
     });
     const usageCache = JSON.parse(
       await fs.readFile(path.join(codexDir, "auth_accounts_usage.json"), "utf8"),
     );
     assert.equal(usageCache.work.fiveHour.pct, 64);
+    assert.equal(usageCache.work.fiveHour.resetAtMs, 1777730400000);
   } finally {
-    restoreEnv("HOME", originalHome);
-    restoreEnv("USERPROFILE", originalUserProfile);
+    Date.now = originalNow;
+    process.env.HOME = originalHome;
     await fs.rm(home, { recursive: true, force: true });
   }
+});
+
+test("switch schedules detached macOS reopen from the main-process action", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    const selectedAuth = authWithEmail("work@example.com");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), selectedAuth);
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(
+      immediateRelaunchApi(calls, {
+        platform: "darwin",
+        execPath: "/Applications/Codex.app/Contents/MacOS/Codex",
+        spawn(command, args, options) {
+          calls.push({ command, args, options });
+          return {
+            unref() {
+              calls.push("unref");
+            },
+          };
+        },
+      }),
+    );
+    const result = await service.handle({ action: "switch", name: "work" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "auth.json"), "utf8"), selectedAuth);
+    assert.deepEqual(calls, [
+      "delay:0",
+      {
+        command: "/bin/sh",
+        args: [
+          "-c",
+          'sleep "$1"; exec /usr/bin/open -n "$2"',
+          "codex-account-switcher-relaunch",
+          "1",
+          "/Applications/Codex.app",
+        ],
+        options: { detached: true, stdio: "ignore" },
+      },
+      "unref",
+      "exit:0",
+    ]);
+  });
+});
+
+test("switch falls back to Electron relaunch outside macOS", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    const selectedAuth = authWithEmail("work@example.com");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), selectedAuth);
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
+    const result = await service.handle({ action: "switch", name: "work" });
+
+    assert.equal(result.ok, true);
+    assert.equal(await fs.readFile(path.join(codexDir, "auth.json"), "utf8"), selectedAuth);
+    assert.deepEqual(calls, ["delay:0", "relaunch", "exit:0"]);
+  });
+});
+
+test("switch falls back to Electron relaunch when the macOS app root is unavailable", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), authWithEmail("work@example.com"));
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(
+      immediateRelaunchApi(calls, {
+        platform: "darwin",
+        execPath: "/usr/local/bin/node",
+        spawn() {
+          assert.fail("spawn should not be called without a macOS app root");
+        },
+      }),
+    );
+    const result = await service.handle({ action: "switch", name: "work" });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, ["delay:0", "relaunch", "exit:0"]);
+  });
+});
+
+test("switch falls back to Electron relaunch when the detached macOS helper fails", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const accountsDir = path.join(codexDir, "auth_accounts");
+    await fs.mkdir(accountsDir, { recursive: true });
+    await fs.writeFile(path.join(accountsDir, "work.json"), authWithEmail("work@example.com"));
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(
+      immediateRelaunchApi(calls, {
+        platform: "darwin",
+        execPath: "/Applications/Codex.app/Contents/MacOS/Codex",
+        spawn() {
+          calls.push("spawn");
+          throw new Error("spawn failed");
+        },
+      }),
+    );
+    const result = await service.handle({ action: "switch", name: "work" });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, ["delay:0", "spawn", "relaunch", "exit:0"]);
+  });
+});
+
+test("clear-active schedules the same detached macOS reopen after backing up auth", async () => {
+  await withTempHome(async (home) => {
+    const codexDir = path.join(home, ".codex");
+    const selectedAuth = authWithEmail("work@example.com");
+    await fs.mkdir(codexDir, { recursive: true });
+    await fs.writeFile(path.join(codexDir, "auth.json"), selectedAuth);
+    await fs.writeFile(path.join(codexDir, "current_account"), "work\n");
+
+    const calls = [];
+    const { createAccountService } = require("../src/account/service");
+    const service = createAccountService(
+      immediateRelaunchApi(calls, {
+        platform: "darwin",
+        execPath: "/Applications/Codex.app/Contents/MacOS/Codex",
+        spawn(command, args, options) {
+          calls.push({ command, args, options });
+          return {
+            unref() {
+              calls.push("unref");
+            },
+          };
+        },
+      }),
+    );
+    const result = await service.handle({ action: "clear-active" });
+
+    assert.equal(result.ok, true);
+    await assert.rejects(fs.stat(path.join(codexDir, "auth.json")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(codexDir, "current_account")), { code: "ENOENT" });
+    const backupNames = (await fs.readdir(codexDir)).filter((name) =>
+      name.startsWith("auth.account-switcher-backup-"),
+    );
+    assert.equal(backupNames.length, 1);
+    assert.equal(await fs.readFile(path.join(codexDir, backupNames[0]), "utf8"), selectedAuth);
+    assert.deepEqual(calls, [
+      "delay:0",
+      {
+        command: "/bin/sh",
+        args: [
+          "-c",
+          'sleep "$1"; exec /usr/bin/open -n "$2"',
+          "codex-account-switcher-relaunch",
+          "1",
+          "/Applications/Codex.app",
+        ],
+        options: { detached: true, stdio: "ignore" },
+      },
+      "unref",
+      "exit:0",
+    ]);
+  });
 });
 
 test("switch syncs API account base URL into Codex config", async () => {
@@ -191,8 +418,9 @@ test("switch syncs API account base URL into Codex config", async () => {
       'model = "gpt-5.5"\n\n[projects.test]\ntrust_level = "trusted"\n',
     );
 
+    const calls = [];
     const { createAccountService } = require("../src/account/service");
-    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
     const apiResult = await service.handle({ action: "switch", name: "api" });
 
     assert.equal(apiResult.ok, true);
@@ -223,8 +451,9 @@ test("switch leaves config unchanged for API account without base URL", async ()
     const config = 'openai_base_url = "https://existing.example/v1"\nmodel = "gpt-5.5"\n';
     await fs.writeFile(path.join(codexDir, "config.toml"), config);
 
+    const calls = [];
     const { createAccountService } = require("../src/account/service");
-    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
     const result = await service.handle({ action: "switch", name: "api" });
 
     assert.equal(result.ok, true);
@@ -241,10 +470,19 @@ test("switch still copies account when base URL sync cannot parse JSON", async (
     await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
     const warnings = [];
 
+    const calls = [];
     const { createAccountService } = require("../src/account/service");
-    const service = createAccountService({
-      log: { info() {}, warn(message) { warnings.push(message); } },
-    });
+    const service = createAccountService(
+      immediateRelaunchApi(calls, {
+        platform: "linux",
+        log: {
+          info() {},
+          warn(message) {
+            warnings.push(message);
+          },
+        },
+      }),
+    );
     const result = await service.handle({ action: "switch", name: "broken" });
 
     assert.equal(result.ok, true);
@@ -261,11 +499,12 @@ test("clear-active removes configured base URL", async () => {
     await fs.writeFile(path.join(codexDir, "auth.json"), authWithEmail("me@example.com"));
     await fs.writeFile(
       path.join(codexDir, "config.toml"),
-      'openai_base_url = "https://example.com/v1"\nmodel = "gpt-5.5"\n',
+      'openai_base_url = "https://existing.example/v1"\nmodel = "gpt-5.5"\n',
     );
 
+    const calls = [];
     const { createAccountService } = require("../src/account/service");
-    const service = createAccountService({ log: { info() {}, warn() {} } });
+    const service = createAccountService(immediateRelaunchApi(calls, { platform: "linux" }));
     const result = await service.handle({ action: "clear-active" });
 
     assert.equal(result.ok, true);
@@ -373,6 +612,31 @@ test("usage summary includes reset time for exhausted windows", () => {
     );
 
     assert.equal(summary, "5h 0%, resets 8:30 PM · Weekly 0%, resets Sat, 6:00 PM");
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("cached usage projects windows to full after reset time has passed", () => {
+  const { normalizeUsageSnapshot } = require("../src/account/usage");
+  const originalNow = Date.now;
+  Date.now = () => 1777732200000;
+
+  try {
+    const usage = normalizeUsageSnapshot({
+      fiveHour: { label: "5h", pct: 0, resetAt: "8:30 PM", resetAtMs: 1777728600000 },
+      weekly: { label: "Weekly", pct: 84, resetAt: "Sat, 6:00 PM", resetAtMs: 1778324400000 },
+      at: 1777728000000,
+    });
+
+    assert.deepEqual(usage.fiveHour, {
+      label: "5h",
+      pct: 100,
+      resetAt: null,
+      resetAtMs: null,
+      projected: true,
+    });
+    assert.equal(usage.weekly.pct, 84);
   } finally {
     Date.now = originalNow;
   }

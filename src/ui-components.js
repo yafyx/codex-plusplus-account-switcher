@@ -1,6 +1,9 @@
 const { protectInteractiveControl } = require("./dom-utils");
 
-const PANEL_ROW_LEFT_INSET = 30;
+const PANEL_ROW_LEFT_INSET = 64;
+const MENU_ICON_SLOT_WIDTH = "24px";
+const MENU_ICON_TEXT_GAP = "16px";
+const MENU_ICON_LEFT = "24px";
 
 function addButtonFeedback(element, styles) {
   const normal = {
@@ -16,7 +19,10 @@ function addButtonFeedback(element, styles) {
   const hover = styles.hover || {};
   const active = styles.active || hover;
   const restore = () => apply(styles.normal || normal);
-  element.style.transition = "background-color 120ms ease, color 120ms ease, transform 80ms ease";
+  element.style.transformOrigin = "center";
+  element.style.transition = prefersReducedMotion()
+    ? "background-color 120ms ease, color 120ms ease"
+    : "background-color 120ms ease, color 120ms ease, transform 120ms cubic-bezier(0.23, 1, 0.32, 1)";
   element.addEventListener("pointerenter", () => {
     if (element.disabled) return;
     apply(hover);
@@ -38,6 +44,14 @@ function addButtonFeedback(element, styles) {
   element.addEventListener("pointercancel", restore);
 }
 
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 // ─── Popup-panel buttons ──────────────────────────────────────────────────────
 
 function smallButton(label) {
@@ -54,7 +68,7 @@ function smallButton(label) {
     },
     active: {
       background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 22%,transparent)",
-      transform: "scale(0.98)",
+      transform: prefersReducedMotion() ? "" : "scale(0.97)",
     },
   });
   protectInteractiveControl(button);
@@ -79,7 +93,7 @@ function iconButton(label, text) {
     active: {
       background: "color-mix(in srgb,var(--color-token-text-primary,currentColor) 18%,transparent)",
       color: "var(--color-token-text-primary,currentColor)",
-      transform: "scale(0.94)",
+      transform: prefersReducedMotion() ? "" : "scale(0.97)",
     },
   });
   protectInteractiveControl(button);
@@ -103,7 +117,7 @@ function settingsButton(label) {
     },
     active: {
       background: "color-mix(in srgb, currentColor 16%, transparent)",
-      transform: "scale(0.98)",
+      transform: prefersReducedMotion() ? "" : "scale(0.97)",
     },
   });
   protectInteractiveControl(button);
@@ -231,7 +245,81 @@ function accountPanelShell(base) {
     "cursor:default",
     "user-select:none",
   ].join(";");
+  applyNativeMenuMetrics(panel, base);
   return panel;
+}
+
+function applyNativeMenuMetrics(panel, base) {
+  const metrics = nativeMenuMetrics(base);
+  panel.style.setProperty("--codexpp-menu-row-padding-top", metrics.paddingTop);
+  panel.style.setProperty("--codexpp-menu-row-padding-right", metrics.paddingRight);
+  panel.style.setProperty("--codexpp-menu-row-padding-bottom", metrics.paddingBottom);
+  panel.style.setProperty("--codexpp-menu-row-padding-left", metrics.paddingLeft);
+  panel.style.setProperty("--codexpp-menu-row-height", metrics.height);
+  panel.style.setProperty("--codexpp-menu-row-radius", metrics.borderRadius);
+  panel.style.setProperty("--codexpp-menu-icon-left", metrics.iconLeft);
+  panel.style.setProperty("--codexpp-menu-icon-slot-width", metrics.iconSlotWidth);
+  panel.style.setProperty("--codexpp-menu-icon-gap", metrics.iconGap);
+  panel.style.setProperty("--codexpp-menu-text-inset", metrics.textInset);
+}
+
+function nativeMenuMetrics(base) {
+  const fallback = {
+    paddingTop: "0px",
+    paddingRight: "24px",
+    paddingBottom: "0px",
+    paddingLeft: "24px",
+    height: "40px",
+    borderRadius: "8px",
+    iconLeft: MENU_ICON_LEFT,
+    iconSlotWidth: MENU_ICON_SLOT_WIDTH,
+    iconGap: MENU_ICON_TEXT_GAP,
+    textInset: PANEL_ROW_LEFT_INSET + "px",
+  };
+  if (!base || typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
+    return fallback;
+  }
+
+  const style = window.getComputedStyle(base);
+  const rect = typeof base.getBoundingClientRect === "function" ? base.getBoundingClientRect() : null;
+  const iconRect = base.querySelector("svg")?.getBoundingClientRect();
+  const textRect = firstTextRect(base);
+  return {
+    paddingTop: cssLengthOr(style.paddingTop, fallback.paddingTop),
+    paddingRight: cssLengthOr(style.paddingRight, fallback.paddingRight),
+    paddingBottom: cssLengthOr(style.paddingBottom, fallback.paddingBottom),
+    paddingLeft: cssLengthOr(style.paddingLeft, fallback.paddingLeft),
+    height: rect?.height > 0 ? `${Math.round(rect.height)}px` : fallback.height,
+    borderRadius: cssLengthOr(style.borderRadius, fallback.borderRadius),
+    iconLeft: rect && iconRect?.width > 0 ? `${Math.round(iconRect.left - rect.left)}px` : fallback.iconLeft,
+    iconSlotWidth: iconRect?.width > 0 ? `${Math.round(iconRect.width)}px` : fallback.iconSlotWidth,
+    iconGap: MENU_ICON_TEXT_GAP,
+    textInset: rect && textRect?.width > 0 ? `${Math.round(textRect.left - rect.left)}px` : fallback.textInset,
+  };
+}
+
+function firstTextRect(element) {
+  if (typeof document === "undefined" || typeof document.createTreeWalker !== "function") return null;
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.textContent?.trim()) {
+      const parent = node.parentElement;
+      if (!parent?.closest("svg")) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rect = Array.from(range.getClientRects()).find((item) => item.width > 0 && item.height > 0);
+        range.detach?.();
+        if (rect) return rect;
+      }
+    }
+    node = walker.nextNode();
+  }
+  return null;
+}
+
+function cssLengthOr(value, fallback) {
+  return value && value !== "normal" && value !== "auto" && value !== "0px" ? value : fallback;
 }
 
 function setPanelStatus(panel, text) {
@@ -240,7 +328,7 @@ function setPanelStatus(panel, text) {
   status.textContent = text;
   status.style.cssText =
     `font-size:12px;line-height:1.35;color:var(--color-token-text-secondary,currentColor);` +
-    `padding:4px 24px 6px ${PANEL_ROW_LEFT_INSET}px;`;
+    "padding:4px var(--codexpp-menu-row-padding-right,24px) 6px var(--codexpp-menu-text-inset,64px);";
   panel.appendChild(status);
 }
 
@@ -251,22 +339,52 @@ function accountDisplayName(accountState, name, options = {}) {
 }
 
 function accountUsageSummary(accountState, name) {
-  const usage = accountState?.accountUsage?.[name];
-  if (!usage || typeof usage !== "object") return null;
-  const parts = [];
-  const fiveHour = usageWindowSummary(usage.fiveHour, "5h");
-  const weekly = usageWindowSummary(usage.weekly, "Weekly");
-  if (fiveHour) parts.push(fiveHour);
-  if (weekly) parts.push(weekly);
+  const parts = accountUsageParts(accountState, name).map(usageWindowSummary);
   if (!parts.length) return null;
   return parts.join(" · ");
 }
 
-function usageWindowSummary(window, fallbackLabel) {
+function accountUsageTitle(accountState, name) {
+  const parts = accountUsageParts(accountState, name).filter((part) => part.projected);
+  if (!parts.length) return "";
+  const labels = parts.map((part) => part.label).join(", ");
+  return `${labels} reset time has elapsed. Displayed remaining is calculated from the cached reset schedule and updates live when this account is active.`;
+}
+
+function accountUsageParts(accountState, name) {
+  const usage = accountState?.accountUsage?.[name];
+  if (!usage || typeof usage !== "object") return [];
+  return [
+    usageWindowPart(usage.fiveHour, "5h"),
+    usageWindowPart(usage.weekly, "Weekly"),
+  ].filter(Boolean);
+}
+
+function usageWindowPart(window, fallbackLabel) {
   if (typeof window?.pct !== "number") return null;
   const label = window.label || fallbackLabel;
-  const reset = window.pct <= 0 && window.resetAt ? `, resets ${window.resetAt}` : "";
-  return `${label} ${window.pct}%${reset}`;
+  const exhausted = window.pct <= 0;
+  const resetAtMs = Number(window.resetAtMs);
+  const hasResetAtMs = Number.isFinite(resetAtMs) && resetAtMs > 0;
+  const resetPassed = hasResetAtMs && resetAtMs <= Date.now();
+  const part = {
+    label,
+    pct: window.pct,
+    resetAt: typeof window.resetAt === "string" && window.resetAt ? window.resetAt : null,
+    exhausted,
+    resetPassed,
+  };
+  if (window.projected === true) part.projected = true;
+  return part;
+}
+
+function usageWindowSummary(part) {
+  const reset = part.projected
+    ? " (reset elapsed)"
+    : part.exhausted && part.resetAt
+      ? `, resets ${part.resetAt}`
+      : "";
+  return `${part.label} ${part.pct}%${reset}`;
 }
 
 module.exports = {
@@ -285,5 +403,8 @@ module.exports = {
   accountPanelShell,
   setPanelStatus,
   accountDisplayName,
+  accountUsageParts,
   accountUsageSummary,
+  accountUsageTitle,
+  prefersReducedMotion,
 };

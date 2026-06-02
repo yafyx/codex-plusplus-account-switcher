@@ -37,26 +37,94 @@ async function writeAccountUsage(name, snapshot) {
 
 function normalizeUsageSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return null;
-  const fiveHour = normalizeUsageWindow(snapshot.fiveHour);
-  const weekly = normalizeUsageWindow(snapshot.weekly);
-  if (!fiveHour && !weekly) return null;
   const at = Number(snapshot.at);
+  const snapshotAt = Number.isFinite(at) ? at : Date.now();
+  const fiveHour = normalizeUsageWindow(snapshot.fiveHour, snapshotAt);
+  const weekly = normalizeUsageWindow(snapshot.weekly, snapshotAt);
+  if (!fiveHour && !weekly) return null;
   return {
     fiveHour,
     weekly,
-    at: Number.isFinite(at) ? at : Date.now(),
+    at: snapshotAt,
   };
 }
 
-function normalizeUsageWindow(window) {
+function normalizeUsageWindow(window, snapshotAt = Date.now()) {
   if (!window || typeof window !== "object") return null;
   const pct = Number(window.pct);
   if (!Number.isFinite(pct)) return null;
-  return {
+  const resetAt = typeof window.resetAt === "string" && window.resetAt ? window.resetAt : null;
+  const resetAtMs = normalizeResetAtMs(window.resetAtMs) || inferResetAtMs(resetAt, snapshotAt);
+  if (resetAtMs && resetAtMs <= Date.now()) {
+    return {
+      label: typeof window.label === "string" && window.label ? window.label : null,
+      pct: 100,
+      resetAt: null,
+      resetAtMs: null,
+      projected: true,
+    };
+  }
+  const normalized = {
     label: typeof window.label === "string" && window.label ? window.label : null,
     pct: Math.max(0, Math.min(100, Math.round(pct))),
-    resetAt: typeof window.resetAt === "string" && window.resetAt ? window.resetAt : null,
+    resetAt,
+    resetAtMs,
   };
+  if (window.projected === true) normalized.projected = true;
+  return normalized;
+}
+
+function normalizeResetAtMs(value) {
+  const resetAtMs = Number(value);
+  if (!Number.isFinite(resetAtMs) || resetAtMs <= 0) return null;
+  return resetAtMs;
+}
+
+function inferResetAtMs(resetAt, snapshotAt) {
+  if (typeof resetAt !== "string" || !resetAt.trim() || !Number.isFinite(snapshotAt)) return null;
+  const weekday = parseWeekday(resetAt);
+  const time = parseClockTime(resetAt);
+  if (!time) return null;
+
+  const date = new Date(snapshotAt);
+  date.setHours(time.hours, time.minutes, 0, 0);
+
+  if (weekday !== null) {
+    const dayDelta = (weekday - date.getDay() + 7) % 7;
+    date.setDate(date.getDate() + dayDelta);
+  }
+
+  if (date.getTime() < snapshotAt - 60_000) {
+    date.setDate(date.getDate() + (weekday === null ? 1 : 7));
+  }
+
+  const inferred = date.getTime();
+  return Number.isFinite(inferred) ? inferred : null;
+}
+
+function parseWeekday(value) {
+  const match = /\b(sun|mon|tue|wed|thu|fri|sat)\b/i.exec(value);
+  if (!match) return null;
+  return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].indexOf(match[1].toLowerCase());
+}
+
+function parseClockTime(value) {
+  const match = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(value);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = match[2] ? Number(match[2]) : 0;
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+    return null;
+  }
+  const suffix = match[3]?.toLowerCase();
+  if (suffix) {
+    if (hours < 1 || hours > 12) return null;
+    if (hours === 12) hours = 0;
+    if (suffix === "pm") hours += 12;
+  } else if (hours > 23) {
+    return null;
+  }
+  return { hours, minutes };
 }
 
 async function fetchActiveUsageSnapshot(api) {
@@ -180,18 +248,18 @@ function usageWindowSnapshot(window, label) {
   if (!window || typeof window !== "object") return null;
   const used = Number(window.used_percent);
   if (!Number.isFinite(used)) return null;
-  const resetAt = formatUsageResetAt(window.reset_at, Number(window.limit_window_seconds) >= 86400);
+  const resetAtMs = normalizeResetAtMs(Number(window.reset_at) * 1000);
+  const resetAt = formatUsageResetAt(resetAtMs, Number(window.limit_window_seconds) >= 86400);
   return {
     label,
     pct: Math.round(Math.min(Math.max(100 - used, 0), 100)),
     resetAt,
+    resetAtMs,
   };
 }
 
-function formatUsageResetAt(epochSeconds, includeDay) {
-  const seconds = Number(epochSeconds);
-  if (!Number.isFinite(seconds)) return null;
-  const date = new Date(seconds * 1000);
+function formatUsageResetAt(epochMs, includeDay) {
+  const date = new Date(epochMs);
   if (!Number.isFinite(date.getTime())) return null;
   return date.toLocaleTimeString(undefined, {
     ...(includeDay ? { weekday: "short" } : {}),

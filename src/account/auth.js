@@ -10,17 +10,35 @@ function emailFromAuth(auth) {
   const direct = auth?.email || auth?.user?.email || auth?.account?.email;
   if (typeof direct === "string" && direct.includes("@")) return direct;
 
-  const idToken = auth?.tokens?.id_token;
-  if (typeof idToken !== "string") return null;
-  const [, payload] = idToken.split(".");
-  if (!payload) return null;
+  const claims = claimsFromToken(auth?.tokens?.id_token);
+  return typeof claims?.email === "string" && claims.email.includes("@") ? claims.email : null;
+}
 
+function planFromAuthString(raw) {
   try {
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return typeof claims.email === "string" && claims.email.includes("@") ? claims.email : null;
+    return planFromAuth(JSON.parse(raw));
   } catch {
     return null;
   }
 }
 
-module.exports = { emailFromAuthString, emailFromAuth };
+function planFromAuth(auth) {
+  for (const token of [auth?.tokens?.id_token, auth?.tokens?.access_token]) {
+    const plan = claimsFromToken(token)?.["https://api.openai.com/auth"]?.chatgpt_plan_type;
+    if (typeof plan === "string" && plan.trim()) return plan.trim().toLowerCase();
+  }
+  return null;
+}
+
+function claimsFromToken(token) {
+  if (typeof token !== "string") return null;
+  const [, payload] = token.split(".");
+  if (!payload) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { emailFromAuthString, emailFromAuth, planFromAuthString, planFromAuth };

@@ -1,5 +1,5 @@
 const { nodeDeps, codexAuthPaths, accountPath, pathExists } = require("../node-utils");
-const { emailFromAuthString } = require("./auth");
+const { emailFromAuthString, planFromAuthString } = require("./auth");
 const {
   accountContentsMatchActive,
   ensureAutosavedActiveAccount,
@@ -19,10 +19,14 @@ async function readState(extra = {}) {
   const accountEmails = Object.fromEntries(
     visibleAccounts.map(({ name, email }) => [name, email]).filter(([, email]) => email),
   );
+  const accountPlans = Object.fromEntries(
+    visibleAccounts.map(({ name, plan }) => [name, plan]).filter(([, plan]) => plan),
+  );
   const accountUsage = await readAccountUsage(accounts);
   return {
     accounts,
     accountEmails,
+    accountPlans,
     accountUsage,
     current,
     hasActiveAuth,
@@ -69,6 +73,7 @@ async function readAccountDetails(name) {
   return {
     name,
     email: raw ? emailFromAuthString(raw) : null,
+    plan: raw ? planFromAuthString(raw) : null,
     isActive: raw ? await accountContentsMatchActive(raw) : false,
     mtimeMs,
   };

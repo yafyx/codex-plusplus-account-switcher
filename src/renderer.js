@@ -2,6 +2,13 @@ const { compactText, isVisible, findMenuItem } = require("./dom-utils");
 const { accountPanelShell, renderAccountPanel, refreshPanel } = require("./ui-popup");
 const { renderAccountsPage } = require("./ui-settings");
 
+const MENU_CONTAINER_SELECTOR =
+  '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]';
+const MENU_COMMAND_SELECTOR = 'button, a, [role="button"], [role="menuitem"]';
+const PERSONAL_ACCOUNT_PATTERN = /\bpersonal account\b/i;
+const USAGE_REMAINING_PATTERN = /\busage remaining\b/i;
+const RATE_LIMITS_PATTERN = /\brate limits(?: remaining)?\b/i;
+
 /**
  * Bootstraps the renderer-side of the account switcher:
  *  1. Registers the dedicated Settings page (if the SDK supports it).
@@ -34,7 +41,7 @@ function startRenderer(state) {
     );
   }
 
-  // ── Mutation observer: inject panel into the account popup ────────────────
+  // ── Observer + polling: inject panel into the account popup ──────────────
   const schedule = () => {
     if (state.disposed || state.pending) return;
     state.pending = window.requestAnimationFrame(() => {
@@ -45,12 +52,15 @@ function startRenderer(state) {
 
   state.observer = new MutationObserver(schedule);
   state.observer.observe(document.documentElement, { childList: true, subtree: true });
-  // Disconnect the observer when the tweak is stopped to avoid a memory leak.
   state.disposers.push(() => state.observer?.disconnect());
   document.addEventListener("pointerdown", schedule, true);
   document.addEventListener("keydown", schedule, true);
   state.disposers.push(() => document.removeEventListener("pointerdown", schedule, true));
   state.disposers.push(() => document.removeEventListener("keydown", schedule, true));
+  // Poll every 300 ms as a safety net in case the popover appears without
+  // triggering a DOM mutation (e.g. CSS-driven show/hide of a persisted node).
+  state.pollTimer = window.setInterval(schedule, 300);
+  state.disposers.push(() => window.clearInterval(state.pollTimer));
   schedule();
 }
 
@@ -63,75 +73,145 @@ function scanForAccountMenu(state) {
   installAccountSwitcher(state, menu);
 }
 
+/**
+ * Finds the settings/account popover that Codex opens from the gear button
+ * in the bottom-left sidebar.
+ *
+ * Strategy (in order):
+ *  1. Walk every visible element on the page.  If one contains "Personal
+ *     account" text, walk up to the nearest popover/menu container and return
+ *     it.  This catches the popover regardless of what Radix component it
+ *     uses (Popover, DropdownMenu, Dialog, etc.).
+ *  2. Classic strict check on `[role="menu"]` / `[data-radix-menu-content]`.
+ *  3. Classic fallbacks via rate-limits anchor or sidebar-item anchor.
+ */
 function findSettingsAccountMenu() {
-  const candidates = Array.from(
-    document.querySelectorAll(
-      '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]',
-    ),
-  );
-  for (const candidate of candidates) {
+  const commandMenu = findAccountMenuByCommands();
+  if (commandMenu) return commandMenu;
+
+  // ── Strategy 1: walk ALL visible elements for "Personal account" ──────────
+  const all = document.querySelectorAll('*');
+  for (const el of all) {
+    if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
+    if (!PERSONAL_ACCOUNT_PATTERN.test(compactText(el))) continue;
+
+    const menu = findAccountMenuContainer(el);
+    if (menu) return menu;
+  }
+
+  // ── Strategy 2: strict legacy check on menu elements ──────────────────────
+  const menus = document.querySelectorAll('[role="menu"], [data-radix-menu-content]');
+  for (const candidate of menus) {
     if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) continue;
     const text = compactText(candidate);
-    if (!/\bsettings\b/i.test(text) || !/\blog out\b/i.test(text)) continue;
-    if (!hasUsageRemainingItem(candidate) && !/\bpersonal account\b/i.test(text)) continue;
-    return candidate.matches("[data-radix-popper-content-wrapper]")
-      ? candidate.querySelector('[role="menu"], [data-radix-menu-content]') || candidate
-      : candidate;
+    if (!isAccountMenuText(text)) continue;
+    return candidate;
   }
-  return findAccountMenuByRateLimits() || findSidebarAccountMenuByItems();
+
+  // ── Strategy 3: fallback heuristics ───────────────────────────────────────
+  return findAccountMenuByUsageItem() || findSidebarAccountMenuByItems();
 }
 
-function findAccountMenuByRateLimits() {
-  const usageRemaining = findUsageRemainingItem();
-  if (!usageRemaining) return null;
-  const menu = usageRemaining.closest(
-    '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]',
-  );
-  if (menu instanceof HTMLElement && isVisible(menu)) {
-    const text = compactText(menu);
-    if (/\bsettings\b/i.test(text) || /\blog out\b/i.test(text) || hasUsageRemainingItem(menu)) {
-      return menu.matches("[data-radix-popper-content-wrapper]")
-        ? menu.querySelector('[role="menu"], [data-radix-menu-content]') || menu
-        : menu;
+function findAccountMenuByCommands() {
+  const commands = visibleMenuCommands();
+  for (const settings of commands) {
+    if (!/\bsettings\b/i.test(compactText(settings))) continue;
+
+    let node = settings.parentElement;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (node instanceof HTMLElement && isPlausibleAccountMenu(node)) {
+        const hasLogout = commands.some((item) => {
+          return item !== settings && node.contains(item) && /\blog out\b/i.test(compactText(item));
+        });
+        const hasMarker =
+          hasAccountMenuMarker(compactText(node)) ||
+          commands.some((item) => node.contains(item) && hasAccountMenuMarker(compactText(item)));
+        if (hasLogout && hasMarker) return normalizeMenuContainer(node);
+      }
+      node = node.parentElement;
     }
   }
-  const parent = usageRemaining.parentElement;
-  return parent instanceof HTMLElement && isVisible(parent) ? parent : null;
+
+  return null;
 }
 
-function findUsageRemainingItem(root = document) {
-  const selectorMatch = root.querySelector(
-    [
-      '[id*="usage" i]',
-      '[class*="usage" i]',
-      '[data-testid*="usage" i]',
-      '[data-test*="usage" i]',
-      '[aria-label*="usage" i]',
-      '[title*="usage" i]',
-    ].join(","),
-  );
-  if (
-    selectorMatch instanceof HTMLElement &&
-    isVisible(selectorMatch) &&
-    !selectorMatch.closest("[data-codexpp-account-switcher]")
-  ) {
-    const item = selectorMatch.closest('button, a, [role="button"], [role="menuitem"]');
-    return item instanceof HTMLElement && isVisible(item) ? item : selectorMatch;
+function visibleMenuCommands(root = document) {
+  return Array.from(root.querySelectorAll(MENU_COMMAND_SELECTOR)).filter((element) => {
+    return (
+      element instanceof HTMLElement &&
+      isVisible(element) &&
+      !element.closest("[data-codexpp-account-switcher]")
+    );
+  });
+}
+
+function findAccountMenuContainer(element) {
+  const menu = normalizeMenuContainer(element.closest(MENU_CONTAINER_SELECTOR));
+  if (menu instanceof HTMLElement && isPlausibleAccountMenu(menu)) {
+    const text = compactText(menu);
+    if (isAccountMenuText(text)) return menu;
   }
 
-  const candidates = root.querySelectorAll('button, a, [role="button"], [role="menuitem"]');
+  let node = element.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    if (node instanceof HTMLElement && isPlausibleAccountMenu(node) && isAccountMenuText(compactText(node))) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+
+  return null;
+}
+
+function normalizeMenuContainer(container) {
+  if (!(container instanceof HTMLElement)) return null;
+  if (!container.matches("[data-radix-popper-content-wrapper]")) return container;
+  const content = container.querySelector('[role="menu"], [data-radix-menu-content]');
+  return content instanceof HTMLElement ? content : container;
+}
+
+function isPlausibleAccountMenu(element) {
+  if (!isVisible(element)) return false;
+  if (element.matches(MENU_CONTAINER_SELECTOR)) return true;
+
+  const rect = element.getBoundingClientRect();
+  const width = window.innerWidth || document.documentElement.clientWidth || 0;
+  const height = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (width > 0 && height > 0 && rect.width >= width * 0.8 && rect.height >= height * 0.8) {
+    return false;
+  }
+
+  return rect.width <= 720 && rect.height <= 900;
+}
+
+function isAccountMenuText(text) {
+  return /\bsettings\b/i.test(text) && /\blog out\b/i.test(text) && hasAccountMenuMarker(text);
+}
+
+function hasAccountMenuMarker(text) {
+  return (
+    PERSONAL_ACCOUNT_PATTERN.test(text) ||
+    USAGE_REMAINING_PATTERN.test(text) ||
+    RATE_LIMITS_PATTERN.test(text)
+  );
+}
+
+function findAccountMenuByUsageItem() {
+  const usageItem = findUsageItem();
+  if (!usageItem) return null;
+  return findAccountMenuContainer(usageItem);
+}
+
+function findUsageItem(root = document) {
+  const candidates = root.querySelectorAll(MENU_COMMAND_SELECTOR);
   for (const element of candidates) {
     if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
     if (element.closest("[data-codexpp-account-switcher]")) continue;
     const text = compactText(element).toLowerCase();
-    if (!/\busage remaining\b/.test(text) && !/\brate limits remaining\b/.test(text)) continue;
+    if (!USAGE_REMAINING_PATTERN.test(text) && !RATE_LIMITS_PATTERN.test(text)) continue;
     return element;
   }
   return null;
-}
-
-function hasUsageRemainingItem(root) {
-  return Boolean(findUsageRemainingItem(root));
 }
 
 function findSidebarAccountMenuByItems() {
@@ -146,7 +226,7 @@ function findSidebarAccountMenuByItems() {
   while (node && node !== document.body) {
     if (node.contains(logout)) {
       const text = compactText(node);
-      if (hasUsageRemainingItem(node) || /\bpersonal account\b/i.test(text)) {
+      if (isAccountMenuText(text)) {
         return node;
       }
     }
@@ -157,12 +237,22 @@ function findSidebarAccountMenuByItems() {
 
 function installAccountSwitcher(state, menu) {
   const target =
-    findUsageRemainingItem(menu) ||
     findMenuItem(menu, /settings/i) ||
+    findMenuItem(menu, USAGE_REMAINING_PATTERN) ||
+    findMenuItem(menu, RATE_LIMITS_PATTERN) ||
+    findMenuItem(menu, /personal account/i) ||
     Array.from(menu.children).find((child) => child instanceof HTMLElement);
   if (!(target instanceof HTMLElement) || !target.parentElement) return;
 
   const panel = accountPanelShell(target);
+
+  // When anchoring on "Personal account", remove the copy-id row
+  // above it so the panel replaces it cleanly.
+  if (/\bpersonal account\b/i.test(compactText(target))) {
+    const prev = target.previousElementSibling;
+    if (prev instanceof HTMLElement) prev.remove();
+  }
+
   target.before(panel);
   // Attach an explicit catch so the promise rejection is never silently swallowed.
   refreshPanel(state, panel).catch((error) => {
@@ -170,4 +260,10 @@ function installAccountSwitcher(state, menu) {
   });
 }
 
-module.exports = { startRenderer };
+module.exports = {
+  startRenderer,
+  _test: {
+    hasAccountMenuMarker,
+    isAccountMenuText,
+  },
+};

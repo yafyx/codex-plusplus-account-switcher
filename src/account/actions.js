@@ -17,6 +17,11 @@ const {
   syncOpenAIBaseUrlForAccount,
 } = require("./config");
 
+let relaunchScheduled = false;
+const MAC_APP_EXEC_MARKER = ".app/Contents/MacOS/";
+const MAC_REOPEN_DELAY_SECONDS = "1";
+const MAC_REOPEN_SCRIPT = 'sleep "$1"; exec /usr/bin/open -n "$2"';
+
 async function saveCurrentAccount(rawName) {
   const { fsp } = nodeDeps();
   const { AUTH_PATH, ACCOUNTS_DIR, CURRENT_NAME_PATH } = codexAuthPaths();
@@ -46,7 +51,8 @@ async function switchAccount(rawName, api) {
   }
   await fsp.copyFile(source, AUTH_PATH);
   await fsp.writeFile(CURRENT_NAME_PATH, `${name}\n`, "utf8");
-  api?.log?.info?.(`[account-switcher] switched auth file to ${name}; app relaunch required`);
+  api?.log?.info?.(`[account-switcher] switched auth file to ${name}; scheduling app relaunch`);
+  scheduleCodexRelaunch(api, 0);
   return readState({
     notice: t("service.switched", { name }),
     requiresAppRelaunch: true,
@@ -82,7 +88,8 @@ async function clearActiveAuth(api) {
     await fsp.rm(AUTH_PATH, { force: true });
   }
   await fsp.rm(CURRENT_NAME_PATH, { force: true });
-  api?.log?.info?.("[account-switcher] cleared active auth file; app relaunch required");
+  api?.log?.info?.("[account-switcher] cleared active auth file; scheduling app relaunch");
+  scheduleCodexRelaunch(api, 0);
   return readState({
     notice: t("service.sessionCleared"),
     requiresAppRelaunch: true,
@@ -100,13 +107,64 @@ async function refreshActiveUsage(api) {
 
 async function relaunchCodex(api) {
   api?.log?.info?.("[account-switcher] relaunch requested");
-  const electronRequire = eval("require");
-  const { app } = electronRequire("electron");
-  setTimeout(() => {
-    app.relaunch();
-    app.exit(0);
-  }, 100);
+  scheduleCodexRelaunch(api, 100);
   return readState({ notice: t("service.relaunching") });
+}
+
+function scheduleCodexRelaunch(api, delayMs) {
+  if (relaunchScheduled) return;
+  const app = electronApp(api);
+  const schedule = typeof api?.setTimeout === "function" ? api.setTimeout.bind(api) : setTimeout;
+  relaunchScheduled = true;
+  schedule(() => {
+    relaunchScheduled = false;
+    relaunchCodexNow(api, app);
+  }, delayMs);
+}
+
+function relaunchCodexNow(api, app) {
+  if (!scheduleMacCodexReopen(api)) {
+    app.relaunch();
+  }
+  app.exit(0);
+}
+
+function scheduleMacCodexReopen(api) {
+  const platform = api?.platform || process.platform;
+  if (platform !== "darwin") return false;
+
+  const appRoot = inferMacAppRoot(api?.execPath || process.execPath);
+  if (!appRoot) {
+    api?.log?.warn?.("[account-switcher] unable to infer macOS app root; using Electron relaunch");
+    return false;
+  }
+
+  try {
+    const spawn = api?.spawn || require("node:child_process").spawn;
+    const child = spawn(
+      "/bin/sh",
+      ["-c", MAC_REOPEN_SCRIPT, "codex-account-switcher-relaunch", MAC_REOPEN_DELAY_SECONDS, appRoot],
+      { detached: true, stdio: "ignore" },
+    );
+    child.unref();
+    api?.log?.info?.(`[account-switcher] scheduled detached macOS reopen for ${appRoot}`);
+    return true;
+  } catch (error) {
+    api?.log?.warn?.(`[account-switcher] unable to schedule detached macOS reopen: ${String(error)}`);
+    return false;
+  }
+}
+
+function inferMacAppRoot(execPath) {
+  if (typeof execPath !== "string") return null;
+  const index = execPath.indexOf(MAC_APP_EXEC_MARKER);
+  return index >= 0 ? execPath.slice(0, index + ".app".length) : null;
+}
+
+function electronApp(api) {
+  if (api?.app) return api.app;
+  const electronRequire = eval("require");
+  return electronRequire("electron").app;
 }
 
 module.exports = {

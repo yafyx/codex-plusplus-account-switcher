@@ -24,7 +24,7 @@ module.exports = {
 
     const state = {
       api,
-      accountsExpanded: true,
+      accountsExpanded: false,
       observer: null,
       pending: 0,
       disposed: false,

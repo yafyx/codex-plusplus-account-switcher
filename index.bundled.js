@@ -1054,6 +1054,157 @@ var require_dom_utils = __commonJS({
   }
 });
 
+// src/menu-finder.js
+var require_menu_finder = __commonJS({
+  "src/menu-finder.js"(exports2, module2) {
+    var { compactText, isVisible } = require_dom_utils();
+    var MENU_CONTAINER_SELECTOR = '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]';
+    var MENU_COMMAND_SELECTOR = 'button, a, [role="button"], [role="menuitem"]';
+    var PERSONAL_ACCOUNT_PATTERN = /\bpersonal account\b/i;
+    var USAGE_REMAINING_PATTERN = /\busage remaining\b/i;
+    var RATE_LIMITS_PATTERN = /\brate limits(?: remaining)?\b/i;
+    function findSettingsAccountMenu() {
+      return findAccountMenuByCommands() || findAccountMenuByScopedMarkers() || findAccountMenuByPageMarker() || findAccountMenuByLegacyMenuText() || findAccountMenuByUsageItem() || findSidebarAccountMenuByItems();
+    }
+    function findAccountMenuByCommands() {
+      const commands = visibleMenuCommands();
+      for (const settings of commands) {
+        if (!/\bsettings\b/i.test(compactText(settings))) continue;
+        let node = settings.parentElement;
+        while (node && node !== document.body && node !== document.documentElement) {
+          if (node instanceof HTMLElement && isPlausibleAccountMenu(node)) {
+            const hasLogout = commands.some((item) => {
+              return item !== settings && node.contains(item) && /\blog out\b/i.test(compactText(item));
+            });
+            const hasMarker = hasAccountMenuMarker(compactText(node)) || commands.some((item) => node.contains(item) && hasAccountMenuMarker(compactText(item)));
+            if (hasLogout && hasMarker) return normalizeMenuContainer(node);
+          }
+          node = node.parentElement;
+        }
+      }
+      return null;
+    }
+    function findAccountMenuByScopedMarkers() {
+      const containers = document.querySelectorAll(MENU_CONTAINER_SELECTOR);
+      for (const container of containers) {
+        const menu = normalizeMenuContainer(container);
+        if (!(menu instanceof HTMLElement) || !isVisible(menu)) continue;
+        const marker = findVisibleTextMatch(menu, PERSONAL_ACCOUNT_PATTERN);
+        if (!marker) continue;
+        const accountMenu = findAccountMenuContainer(marker);
+        if (accountMenu) return accountMenu;
+      }
+      return null;
+    }
+    function findAccountMenuByPageMarker() {
+      const marker = findVisibleTextMatch(document, PERSONAL_ACCOUNT_PATTERN, "*");
+      return marker ? findAccountMenuContainer(marker) : null;
+    }
+    function findVisibleTextMatch(root, pattern, selector = MENU_COMMAND_SELECTOR) {
+      const candidates2 = root.querySelectorAll(selector);
+      for (const element of candidates2) {
+        if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
+        if (element.closest("[data-codexpp-account-switcher]")) continue;
+        if (pattern.test(compactText(element))) return element;
+      }
+      return null;
+    }
+    function findAccountMenuByLegacyMenuText() {
+      const menus = document.querySelectorAll('[role="menu"], [data-radix-menu-content]');
+      for (const candidate of menus) {
+        if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) continue;
+        if (isAccountMenuText(compactText(candidate))) return candidate;
+      }
+      return null;
+    }
+    function visibleMenuCommands(root = document) {
+      return Array.from(root.querySelectorAll(MENU_COMMAND_SELECTOR)).filter((element) => {
+        return element instanceof HTMLElement && isVisible(element) && !element.closest("[data-codexpp-account-switcher]");
+      });
+    }
+    function findAccountMenuContainer(element) {
+      const menu = normalizeMenuContainer(element.closest(MENU_CONTAINER_SELECTOR));
+      if (menu instanceof HTMLElement && isPlausibleAccountMenu(menu)) {
+        const text = compactText(menu);
+        if (isAccountMenuText(text)) return menu;
+      }
+      let node = element.parentElement;
+      while (node && node !== document.body && node !== document.documentElement) {
+        if (node instanceof HTMLElement && isPlausibleAccountMenu(node) && isAccountMenuText(compactText(node))) {
+          return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+    function normalizeMenuContainer(container) {
+      if (!(container instanceof HTMLElement)) return null;
+      if (!container.matches("[data-radix-popper-content-wrapper]")) return container;
+      const content = container.querySelector('[role="menu"], [data-radix-menu-content]');
+      return content instanceof HTMLElement ? content : container;
+    }
+    function isPlausibleAccountMenu(element) {
+      if (!isVisible(element)) return false;
+      if (element.matches(MENU_CONTAINER_SELECTOR)) return true;
+      const rect = element.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth || 0;
+      const height = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (width > 0 && height > 0 && rect.width >= width * 0.8 && rect.height >= height * 0.8) {
+        return false;
+      }
+      return rect.width <= 720 && rect.height <= 900;
+    }
+    function isAccountMenuText(text) {
+      return /\bsettings\b/i.test(text) && /\blog out\b/i.test(text) && hasAccountMenuMarker(text);
+    }
+    function hasAccountMenuMarker(text) {
+      return PERSONAL_ACCOUNT_PATTERN.test(text) || USAGE_REMAINING_PATTERN.test(text) || RATE_LIMITS_PATTERN.test(text);
+    }
+    function findAccountMenuByUsageItem() {
+      const usageItem = findUsageItem();
+      if (!usageItem) return null;
+      return findAccountMenuContainer(usageItem);
+    }
+    function findUsageItem(root = document) {
+      const candidates2 = root.querySelectorAll(MENU_COMMAND_SELECTOR);
+      for (const element of candidates2) {
+        if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
+        if (element.closest("[data-codexpp-account-switcher]")) continue;
+        const text = compactText(element).toLowerCase();
+        if (!USAGE_REMAINING_PATTERN.test(text) && !RATE_LIMITS_PATTERN.test(text)) continue;
+        return element;
+      }
+      return null;
+    }
+    function findSidebarAccountMenuByItems() {
+      const items = Array.from(
+        document.querySelectorAll('button, a, [role="menuitem"], [data-radix-collection-item]')
+      ).filter((element) => element instanceof HTMLElement && isVisible(element));
+      const settings = items.find((element) => /\bsettings\b/i.test(compactText(element)));
+      const logout = items.find((element) => /\blog out\b/i.test(compactText(element)));
+      if (!settings || !logout) return null;
+      let node = settings.parentElement;
+      while (node && node !== document.body) {
+        if (node.contains(logout)) {
+          const text = compactText(node);
+          if (isAccountMenuText(text)) {
+            return node;
+          }
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+    module2.exports = {
+      RATE_LIMITS_PATTERN,
+      USAGE_REMAINING_PATTERN,
+      findSettingsAccountMenu,
+      hasAccountMenuMarker,
+      isAccountMenuText
+    };
+  }
+});
+
 // src/ipc.js
 var require_ipc = __commonJS({
   "src/ipc.js"(exports2, module2) {
@@ -1593,6 +1744,85 @@ var require_ui_settings = __commonJS({
   }
 });
 
+// src/ui-collapsible.js
+var require_ui_collapsible = __commonJS({
+  "src/ui-collapsible.js"(exports2, module2) {
+    var { prefersReducedMotion } = require_ui_components();
+    var ACCOUNTS_PANEL_TRANSITION_MS = 300;
+    var ACCOUNTS_PANEL_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
+    var ACCOUNTS_CHEVRON_COLLAPSED = "rotate(0deg)";
+    var ACCOUNTS_CHEVRON_EXPANDED = "rotate(90deg)";
+    var ACCOUNTS_BODY_COLLAPSED_TRANSFORM = "translateY(-2px)";
+    var ACCOUNTS_BODY_EXPANDED_TRANSFORM = "translateY(0)";
+    function accountsPanelDuration() {
+      if (prefersReducedMotion()) return 0;
+      return ACCOUNTS_PANEL_TRANSITION_MS;
+    }
+    function accountsBodyTransition(duration) {
+      return `max-height ${duration}ms ${ACCOUNTS_PANEL_EASING},opacity ${duration}ms ${ACCOUNTS_PANEL_EASING},transform ${duration}ms ${ACCOUNTS_PANEL_EASING}`;
+    }
+    function accountsChevronTransform(expanded) {
+      return expanded ? ACCOUNTS_CHEVRON_EXPANDED : ACCOUNTS_CHEVRON_COLLAPSED;
+    }
+    function accountsBodyCss(expanded) {
+      return [
+        "overflow:hidden",
+        "max-height:0",
+        "opacity:0",
+        `transform:${expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM}`,
+        `pointer-events:${expanded ? "auto" : "none"}`,
+        `transition:${expanded ? "none" : accountsBodyTransition(ACCOUNTS_PANEL_TRANSITION_MS)}`
+      ].join(";");
+    }
+    function createAccountsCollapsible(state, elements, expanded) {
+      applyAccountsExpanded(state, elements, expanded, { animate: false });
+      if (expanded && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => {
+          if (elements.body.isConnected) {
+            elements.body.style.transition = accountsBodyTransition(accountsPanelDuration());
+          }
+        });
+      }
+      return {
+        toggle() {
+          applyAccountsExpanded(state, elements, !state.accountsExpanded, { animate: true });
+        },
+        collapse() {
+          applyAccountsExpanded(state, elements, false, { animate: true });
+        }
+      };
+    }
+    function applyAccountsExpanded(state, elements, expanded, options) {
+      state.accountsExpanded = expanded;
+      const duration = options.animate ? accountsPanelDuration() : 0;
+      if (options.animate) {
+        elements.body.style.transition = accountsBodyTransition(duration);
+      }
+      elements.body.style.pointerEvents = expanded ? "auto" : "none";
+      elements.body.style.maxHeight = expanded ? elements.body.scrollHeight + "px" : "0";
+      elements.body.style.opacity = expanded ? "1" : "0";
+      elements.body.style.transform = expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM;
+      elements.header.setAttribute("aria-expanded", String(expanded));
+      if (elements.chevron) {
+        elements.chevron.style.transitionDuration = duration + "ms";
+        elements.chevron.style.transform = accountsChevronTransform(expanded);
+      }
+      for (const note of elements.notes) {
+        note.style.display = expanded ? "block" : "none";
+      }
+    }
+    module2.exports = {
+      ACCOUNTS_PANEL_EASING,
+      ACCOUNTS_PANEL_TRANSITION_MS,
+      accountsBodyCss,
+      accountsBodyTransition,
+      accountsChevronTransform,
+      accountsPanelDuration,
+      createAccountsCollapsible
+    };
+  }
+});
+
 // src/ui-popup.js
 var require_ui_popup = __commonJS({
   "src/ui-popup.js"(exports2, module2) {
@@ -1611,14 +1841,15 @@ var require_ui_popup = __commonJS({
       bindButtonAction,
       prefersReducedMotion
     } = require_ui_components();
-    var ACCOUNTS_PANEL_TRANSITION_MS = 300;
-    var ACCOUNTS_PANEL_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
-    var ACCOUNTS_CHEVRON_COLLAPSED = "rotate(0deg)";
-    var ACCOUNTS_CHEVRON_EXPANDED = "rotate(90deg)";
+    var {
+      ACCOUNTS_PANEL_EASING,
+      accountsBodyCss,
+      accountsChevronTransform,
+      accountsPanelDuration,
+      createAccountsCollapsible
+    } = require_ui_collapsible();
     var ACCOUNTS_CHEVRON_SIZE = "16";
     var ACCOUNTS_CHEVRON_COLOR = "#5C5B56";
-    var ACCOUNTS_BODY_COLLAPSED_TRANSFORM = "translateY(-2px)";
-    var ACCOUNTS_BODY_EXPANDED_TRANSFORM = "translateY(0)";
     var ACCOUNT_CURRENT_BACKGROUND = "color-mix(in srgb,currentColor 5%,transparent)";
     var ACCOUNT_CURRENT_SHADOW = "inset 0 0 0 1px color-mix(in srgb,currentColor 7%,transparent)";
     function renderAccountPanel(state, panel, accountState) {
@@ -1628,7 +1859,8 @@ var require_ui_popup = __commonJS({
       const expanded = state.accountsExpanded === true;
       const section = document.createElement("div");
       section.style.cssText = "display:flex;flex-direction:column;padding:0;";
-      section.appendChild(accountsHeaderRow(state, panel, accountState, expanded));
+      const header = accountsHeaderRow(state, panel, accountState, expanded);
+      section.appendChild(header);
       const list = document.createElement("div");
       list.style.cssText = "display:flex;flex-direction:column;min-width:0;gap:1px;padding:2px 0 4px;";
       if (accounts.length === 0) {
@@ -1643,30 +1875,14 @@ var require_ui_popup = __commonJS({
       list.appendChild(configureAccountsRow(state, panel));
       const body = document.createElement("div");
       body.setAttribute("data-codexpp-account-switcher-body", "accounts");
-      const bodyTransition = accountsBodyTransition(ACCOUNTS_PANEL_TRANSITION_MS);
-      body.style.cssText = [
-        "overflow:hidden",
-        "max-height:0",
-        "opacity:0",
-        `transform:${expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM}`,
-        `pointer-events:${expanded ? "auto" : "none"}`,
-        `transition:${expanded ? "none" : bodyTransition}`
-      ].join(";");
+      body.style.cssText = accountsBodyCss(expanded);
       const bodyInner = document.createElement("div");
       bodyInner.style.cssText = "min-height:0;";
       bodyInner.appendChild(list);
       body.appendChild(bodyInner);
       section.appendChild(body);
       panel.appendChild(section);
-      if (expanded) {
-        body.style.maxHeight = body.scrollHeight + "px";
-        body.style.opacity = "1";
-        body.style.transform = ACCOUNTS_BODY_EXPANDED_TRANSFORM;
-        body.style.pointerEvents = "auto";
-        window.requestAnimationFrame(() => {
-          if (body.isConnected) body.style.transition = bodyTransition;
-        });
-      }
+      const notes = [];
       if (accountState.notice || accountState.error) {
         const note = document.createElement("div");
         note.setAttribute("data-codexpp-account-switcher-notice", "");
@@ -1674,8 +1890,19 @@ var require_ui_popup = __commonJS({
         note.style.cssText = "padding:0 var(--codexpp-menu-row-padding-right,24px) 6px var(--codexpp-menu-text-inset,64px);font-size:11px;line-height:1.3;color:" + (accountState.error ? "var(--color-token-text-error,#ff6b6b)" : "var(--color-token-text-secondary,currentColor)") + ";";
         if (expanded) note.style.display = "block";
         else note.style.display = "none";
+        notes.push(note);
         panel.appendChild(note);
       }
+      panel._codexppAccountsCollapsible = createAccountsCollapsible(
+        state,
+        {
+          body,
+          header,
+          chevron: header.querySelector("[data-accounts-chevron] svg"),
+          notes
+        },
+        expanded
+      );
     }
     function accountsHeaderRow(state, panel, accountState, expanded) {
       const metrics = nativeCollapsibleMetrics(panel);
@@ -1723,30 +1950,7 @@ var require_ui_popup = __commonJS({
       return button;
     }
     function toggleAccountsExpanded(state, panel, accountState, _ignored) {
-      const body = panel.querySelector("[data-codexpp-account-switcher-body]");
-      if (!body) return;
-      const currentlyExpanded = state.accountsExpanded;
-      state.accountsExpanded = !currentlyExpanded;
-      const newExpanded = !currentlyExpanded;
-      const duration = accountsPanelDuration(newExpanded);
-      body.style.transition = accountsBodyTransition(duration);
-      body.style.pointerEvents = newExpanded ? "auto" : "none";
-      body.style.maxHeight = newExpanded ? body.scrollHeight + "px" : "0";
-      body.style.opacity = newExpanded ? "1" : "0";
-      body.style.transform = newExpanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM;
-      const header = panel.querySelector("button[aria-expanded]");
-      if (header) header.setAttribute("aria-expanded", String(newExpanded));
-      const chevron = panel.querySelector("[data-accounts-chevron] svg");
-      if (chevron instanceof SVGElement) {
-        chevron.style.transitionDuration = duration + "ms";
-        chevron.style.transform = accountsChevronTransform(newExpanded);
-      }
-      const notes = panel.querySelectorAll("[data-codexpp-account-switcher-notice]");
-      for (const note of notes) {
-        if (note instanceof HTMLElement) {
-          note.style.display = newExpanded ? "block" : "none";
-        }
-      }
+      panel._codexppAccountsCollapsible?.toggle();
     }
     function accountsIconSlot() {
       const slot = document.createElement("span");
@@ -1879,16 +2083,6 @@ var require_ui_popup = __commonJS({
     function parseCssPixels(value) {
       const parsed = Number.parseFloat(value);
       return Number.isFinite(parsed) ? parsed : 0;
-    }
-    function accountsChevronTransform(expanded) {
-      return expanded ? ACCOUNTS_CHEVRON_EXPANDED : ACCOUNTS_CHEVRON_COLLAPSED;
-    }
-    function accountsPanelDuration() {
-      if (prefersReducedMotion()) return 0;
-      return ACCOUNTS_PANEL_TRANSITION_MS;
-    }
-    function accountsBodyTransition(duration) {
-      return `max-height ${duration}ms ${ACCOUNTS_PANEL_EASING},opacity ${duration}ms ${ACCOUNTS_PANEL_EASING},transform ${duration}ms ${ACCOUNTS_PANEL_EASING}`;
     }
     function accountRow(state, panel, accountState, name) {
       const row = document.createElement("button");
@@ -2081,6 +2275,7 @@ var require_ui_popup = __commonJS({
     function openAccountsSettings(state, panel) {
       const menu = panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') || document;
       const settingsItem = findMenuCommand(menu, /settings/i);
+      panel._codexppAccountsCollapsible?.collapse();
       settingsItem?.click();
       window.setTimeout(() => {
         const accountsNav = Array.from(
@@ -2090,7 +2285,9 @@ var require_ui_popup = __commonJS({
         });
         if (accountsNav instanceof HTMLElement) accountsNav.click();
       }, 300);
-      panel.remove();
+      window.setTimeout(() => {
+        if (panel.isConnected) panel.remove();
+      }, accountsPanelDuration(false));
     }
     function findMenuCommand(root, pattern) {
       return Array.from(root.querySelectorAll('button, a, [role="menuitem"]')).find((element) => {
@@ -2156,14 +2353,16 @@ var require_ui_popup = __commonJS({
 // src/renderer.js
 var require_renderer = __commonJS({
   "src/renderer.js"(exports2, module2) {
-    var { compactText, isVisible, findMenuItem } = require_dom_utils();
+    var { compactText, findMenuItem } = require_dom_utils();
+    var {
+      RATE_LIMITS_PATTERN,
+      USAGE_REMAINING_PATTERN,
+      findSettingsAccountMenu,
+      hasAccountMenuMarker,
+      isAccountMenuText
+    } = require_menu_finder();
     var { accountPanelShell, renderAccountPanel, refreshPanel } = require_ui_popup();
     var { renderAccountsPage } = require_ui_settings();
-    var MENU_CONTAINER_SELECTOR = '[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]';
-    var MENU_COMMAND_SELECTOR = 'button, a, [role="button"], [role="menuitem"]';
-    var PERSONAL_ACCOUNT_PATTERN = /\bpersonal account\b/i;
-    var USAGE_REMAINING_PATTERN = /\busage remaining\b/i;
-    var RATE_LIMITS_PATTERN = /\brate limits(?: remaining)?\b/i;
     function startRenderer2(state) {
       if (typeof state.api.settings?.registerPage === "function") {
         const pageHandle = state.api.settings.registerPage({
@@ -2206,121 +2405,6 @@ var require_renderer = __commonJS({
       if (menu.querySelector("[data-codexpp-account-switcher]")) return;
       installAccountSwitcher(state, menu);
     }
-    function findSettingsAccountMenu() {
-      const commandMenu = findAccountMenuByCommands();
-      if (commandMenu) return commandMenu;
-      const all = document.querySelectorAll("*");
-      for (const el of all) {
-        if (!(el instanceof HTMLElement) || !isVisible(el)) continue;
-        if (!PERSONAL_ACCOUNT_PATTERN.test(compactText(el))) continue;
-        const menu = findAccountMenuContainer(el);
-        if (menu) return menu;
-      }
-      const menus = document.querySelectorAll('[role="menu"], [data-radix-menu-content]');
-      for (const candidate of menus) {
-        if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) continue;
-        const text = compactText(candidate);
-        if (!isAccountMenuText(text)) continue;
-        return candidate;
-      }
-      return findAccountMenuByUsageItem() || findSidebarAccountMenuByItems();
-    }
-    function findAccountMenuByCommands() {
-      const commands = visibleMenuCommands();
-      for (const settings of commands) {
-        if (!/\bsettings\b/i.test(compactText(settings))) continue;
-        let node = settings.parentElement;
-        while (node && node !== document.body && node !== document.documentElement) {
-          if (node instanceof HTMLElement && isPlausibleAccountMenu(node)) {
-            const hasLogout = commands.some((item) => {
-              return item !== settings && node.contains(item) && /\blog out\b/i.test(compactText(item));
-            });
-            const hasMarker = hasAccountMenuMarker(compactText(node)) || commands.some((item) => node.contains(item) && hasAccountMenuMarker(compactText(item)));
-            if (hasLogout && hasMarker) return normalizeMenuContainer(node);
-          }
-          node = node.parentElement;
-        }
-      }
-      return null;
-    }
-    function visibleMenuCommands(root = document) {
-      return Array.from(root.querySelectorAll(MENU_COMMAND_SELECTOR)).filter((element) => {
-        return element instanceof HTMLElement && isVisible(element) && !element.closest("[data-codexpp-account-switcher]");
-      });
-    }
-    function findAccountMenuContainer(element) {
-      const menu = normalizeMenuContainer(element.closest(MENU_CONTAINER_SELECTOR));
-      if (menu instanceof HTMLElement && isPlausibleAccountMenu(menu)) {
-        const text = compactText(menu);
-        if (isAccountMenuText(text)) return menu;
-      }
-      let node = element.parentElement;
-      while (node && node !== document.body && node !== document.documentElement) {
-        if (node instanceof HTMLElement && isPlausibleAccountMenu(node) && isAccountMenuText(compactText(node))) {
-          return node;
-        }
-        node = node.parentElement;
-      }
-      return null;
-    }
-    function normalizeMenuContainer(container) {
-      if (!(container instanceof HTMLElement)) return null;
-      if (!container.matches("[data-radix-popper-content-wrapper]")) return container;
-      const content = container.querySelector('[role="menu"], [data-radix-menu-content]');
-      return content instanceof HTMLElement ? content : container;
-    }
-    function isPlausibleAccountMenu(element) {
-      if (!isVisible(element)) return false;
-      if (element.matches(MENU_CONTAINER_SELECTOR)) return true;
-      const rect = element.getBoundingClientRect();
-      const width = window.innerWidth || document.documentElement.clientWidth || 0;
-      const height = window.innerHeight || document.documentElement.clientHeight || 0;
-      if (width > 0 && height > 0 && rect.width >= width * 0.8 && rect.height >= height * 0.8) {
-        return false;
-      }
-      return rect.width <= 720 && rect.height <= 900;
-    }
-    function isAccountMenuText(text) {
-      return /\bsettings\b/i.test(text) && /\blog out\b/i.test(text) && hasAccountMenuMarker(text);
-    }
-    function hasAccountMenuMarker(text) {
-      return PERSONAL_ACCOUNT_PATTERN.test(text) || USAGE_REMAINING_PATTERN.test(text) || RATE_LIMITS_PATTERN.test(text);
-    }
-    function findAccountMenuByUsageItem() {
-      const usageItem = findUsageItem();
-      if (!usageItem) return null;
-      return findAccountMenuContainer(usageItem);
-    }
-    function findUsageItem(root = document) {
-      const candidates2 = root.querySelectorAll(MENU_COMMAND_SELECTOR);
-      for (const element of candidates2) {
-        if (!(element instanceof HTMLElement) || !isVisible(element)) continue;
-        if (element.closest("[data-codexpp-account-switcher]")) continue;
-        const text = compactText(element).toLowerCase();
-        if (!USAGE_REMAINING_PATTERN.test(text) && !RATE_LIMITS_PATTERN.test(text)) continue;
-        return element;
-      }
-      return null;
-    }
-    function findSidebarAccountMenuByItems() {
-      const items = Array.from(
-        document.querySelectorAll('button, a, [role="menuitem"], [data-radix-collection-item]')
-      ).filter((element) => element instanceof HTMLElement && isVisible(element));
-      const settings = items.find((element) => /\bsettings\b/i.test(compactText(element)));
-      const logout = items.find((element) => /\blog out\b/i.test(compactText(element)));
-      if (!settings || !logout) return null;
-      let node = settings.parentElement;
-      while (node && node !== document.body) {
-        if (node.contains(logout)) {
-          const text = compactText(node);
-          if (isAccountMenuText(text)) {
-            return node;
-          }
-        }
-        node = node.parentElement;
-      }
-      return null;
-    }
     function installAccountSwitcher(state, menu) {
       const target = findMenuItem(menu, /settings/i) || findMenuItem(menu, USAGE_REMAINING_PATTERN) || findMenuItem(menu, RATE_LIMITS_PATTERN) || findMenuItem(menu, /personal account/i) || Array.from(menu.children).find((child) => child instanceof HTMLElement);
       if (!(target instanceof HTMLElement) || !target.parentElement) return;
@@ -2356,7 +2440,7 @@ module.exports = {
     }
     const state = {
       api: api2,
-      accountsExpanded: true,
+      accountsExpanded: false,
       observer: null,
       pending: 0,
       disposed: false,

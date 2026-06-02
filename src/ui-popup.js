@@ -13,17 +13,16 @@ const {
   bindButtonAction,
   prefersReducedMotion,
 } = require("./ui-components");
+const {
+  ACCOUNTS_PANEL_EASING,
+  accountsBodyCss,
+  accountsChevronTransform,
+  accountsPanelDuration,
+  createAccountsCollapsible,
+} = require("./ui-collapsible");
 
-const ACCOUNTS_PANEL_TRANSITION_MS = 300;
-// Strong ease-out (Emil Kowalski recommendation): starts fast, settles naturally.
-// Matches the feel Codex uses for its own "Usage remaining" collapsible.
-const ACCOUNTS_PANEL_EASING = "cubic-bezier(0.23, 1, 0.32, 1)";
-const ACCOUNTS_CHEVRON_COLLAPSED = "rotate(0deg)";
-const ACCOUNTS_CHEVRON_EXPANDED = "rotate(90deg)";
 const ACCOUNTS_CHEVRON_SIZE = "16";
 const ACCOUNTS_CHEVRON_COLOR = "#5C5B56";
-const ACCOUNTS_BODY_COLLAPSED_TRANSFORM = "translateY(-2px)";
-const ACCOUNTS_BODY_EXPANDED_TRANSFORM = "translateY(0)";
 const ACCOUNT_CURRENT_BACKGROUND = "color-mix(in srgb,currentColor 5%,transparent)";
 const ACCOUNT_CURRENT_SHADOW = "inset 0 0 0 1px color-mix(in srgb,currentColor 7%,transparent)";
 
@@ -38,7 +37,8 @@ function renderAccountPanel(state, panel, accountState) {
 
   const section = document.createElement("div");
   section.style.cssText = "display:flex;flex-direction:column;padding:0;";
-  section.appendChild(accountsHeaderRow(state, panel, accountState, expanded));
+  const header = accountsHeaderRow(state, panel, accountState, expanded);
+  section.appendChild(header);
 
   const list = document.createElement("div");
   list.style.cssText =
@@ -63,34 +63,15 @@ function renderAccountPanel(state, panel, accountState) {
   list.appendChild(configureAccountsRow(state, panel));
   const body = document.createElement("div");
   body.setAttribute("data-codexpp-account-switcher-body", "accounts");
-  const bodyTransition = accountsBodyTransition(ACCOUNTS_PANEL_TRANSITION_MS);
-  body.style.cssText = [
-    "overflow:hidden",
-    "max-height:0",
-    "opacity:0",
-    `transform:${expanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM}`,
-    `pointer-events:${expanded ? "auto" : "none"}`,
-    `transition:${expanded ? "none" : bodyTransition}`,
-  ].join(";");
+  body.style.cssText = accountsBodyCss(expanded);
   const bodyInner = document.createElement("div");
   bodyInner.style.cssText = "min-height:0;";
   bodyInner.appendChild(list);
   body.appendChild(bodyInner);
   section.appendChild(body);
   panel.appendChild(section);
-  if (expanded) {
-    // Preserve the expanded state when reopening the menu without replaying a
-    // dropdown animation every time the account popover appears.
-    body.style.maxHeight = body.scrollHeight + "px";
-    body.style.opacity = "1";
-    body.style.transform = ACCOUNTS_BODY_EXPANDED_TRANSFORM;
-    body.style.pointerEvents = "auto";
-    window.requestAnimationFrame(() => {
-      if (body.isConnected) body.style.transition = bodyTransition;
-    });
-  }
 
-  // Notice / error
+  const notes = [];
   if (accountState.notice || accountState.error) {
     const note = document.createElement("div");
     note.setAttribute("data-codexpp-account-switcher-notice", "");
@@ -103,8 +84,20 @@ function renderAccountPanel(state, panel, accountState) {
       ";";
     if (expanded) note.style.display = "block";
     else note.style.display = "none";
+    notes.push(note);
     panel.appendChild(note);
   }
+
+  panel._codexppAccountsCollapsible = createAccountsCollapsible(
+    state,
+    {
+      body,
+      header,
+      chevron: header.querySelector("[data-accounts-chevron] svg"),
+      notes,
+    },
+    expanded,
+  );
 }
 
 function accountsHeaderRow(state, panel, accountState, expanded) {
@@ -161,32 +154,7 @@ function accountsHeaderRow(state, panel, accountState, expanded) {
 }
 
 function toggleAccountsExpanded(state, panel, accountState, _ignored) {
-  const body = panel.querySelector("[data-codexpp-account-switcher-body]");
-  if (!body) return;
-  const currentlyExpanded = state.accountsExpanded;
-  state.accountsExpanded = !currentlyExpanded;
-  const newExpanded = !currentlyExpanded;
-  // Measure actual content height so the max-height animation matches
-  // exactly — no hardcoded value, no jarring snap at the end.
-  const duration = accountsPanelDuration(newExpanded);
-  body.style.transition = accountsBodyTransition(duration);
-  body.style.pointerEvents = newExpanded ? "auto" : "none";
-  body.style.maxHeight = newExpanded ? body.scrollHeight + "px" : "0";
-  body.style.opacity = newExpanded ? "1" : "0";
-  body.style.transform = newExpanded ? ACCOUNTS_BODY_EXPANDED_TRANSFORM : ACCOUNTS_BODY_COLLAPSED_TRANSFORM;
-  const header = panel.querySelector("button[aria-expanded]");
-  if (header) header.setAttribute("aria-expanded", String(newExpanded));
-  const chevron = panel.querySelector("[data-accounts-chevron] svg");
-  if (chevron instanceof SVGElement) {
-    chevron.style.transitionDuration = duration + "ms";
-    chevron.style.transform = accountsChevronTransform(newExpanded);
-  }
-  const notes = panel.querySelectorAll("[data-codexpp-account-switcher-notice]");
-  for (const note of notes) {
-    if (note instanceof HTMLElement) {
-      note.style.display = newExpanded ? "block" : "none";
-    }
-  }
+  panel._codexppAccountsCollapsible?.toggle();
 }
 
 function accountsIconSlot() {
@@ -352,19 +320,6 @@ function findNativeCollapsibleRow(panel, pattern) {
 function parseCssPixels(value) {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function accountsChevronTransform(expanded) {
-  return expanded ? ACCOUNTS_CHEVRON_EXPANDED : ACCOUNTS_CHEVRON_COLLAPSED;
-}
-
-function accountsPanelDuration() {
-  if (prefersReducedMotion()) return 0;
-  return ACCOUNTS_PANEL_TRANSITION_MS;
-}
-
-function accountsBodyTransition(duration) {
-  return `max-height ${duration}ms ${ACCOUNTS_PANEL_EASING},opacity ${duration}ms ${ACCOUNTS_PANEL_EASING},transform ${duration}ms ${ACCOUNTS_PANEL_EASING}`;
 }
 
 // ─── Per-account row ──────────────────────────────────────────────────────────
@@ -595,6 +550,7 @@ function openAccountsSettings(state, panel) {
     panel.closest('[role="menu"], [data-radix-menu-content], [data-radix-popper-content-wrapper]') ||
     document;
   const settingsItem = findMenuCommand(menu, /settings/i);
+  panel._codexppAccountsCollapsible?.collapse();
   settingsItem?.click();
   window.setTimeout(() => {
     const accountsNav = Array.from(
@@ -604,7 +560,9 @@ function openAccountsSettings(state, panel) {
     });
     if (accountsNav instanceof HTMLElement) accountsNav.click();
   }, 300);
-  panel.remove();
+  window.setTimeout(() => {
+    if (panel.isConnected) panel.remove();
+  }, accountsPanelDuration(false));
 }
 
 function findMenuCommand(root, pattern) {

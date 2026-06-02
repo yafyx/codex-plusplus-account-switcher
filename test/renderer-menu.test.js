@@ -841,3 +841,31 @@ test("toggleAccountsExpanded flips state contract", () => {
   state.accountsExpanded = !true;
   assert.equal(state.accountsExpanded, false);
 });
+
+test("accounts collapsible closes expanded accounts state with native timing", () => {
+  withFakeDom(() => {
+    const { renderAccountPanel } = require("../src/ui-popup");
+    const state = { accountsExpanded: true };
+    const panel = document.createElement("div");
+    renderAccountPanel(
+      state,
+      panel,
+      {
+        accounts: ["work"],
+        current: "work",
+        accountEmails: { work: "work@example.com" },
+        accountUsage: {},
+      },
+    );
+
+    panel._codexppAccountsCollapsible.collapse();
+
+    const body = panel.querySelector("[data-codexpp-account-switcher-body]");
+    const header = panel.querySelector("button[aria-expanded]");
+    assert.equal(state.accountsExpanded, false);
+    assert.equal(header.getAttribute("aria-expanded"), "false");
+    assert.equal(body.style.maxHeight, "0");
+    assert.equal(body.style.opacity, "0");
+    assert.match(body.style.transition, /max-height 300ms/);
+  });
+});

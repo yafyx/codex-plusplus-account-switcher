@@ -5,8 +5,8 @@
   "description": "Switch Codex accounts from the account popup and manage saved auth sessions in Settings.",
   "githubRepo": "yafyx/codex-plusplus-account-switcher",
   "author": {
-    "name": "yfyx",
-    "url": "https://github.com/yfyx/"
+    "name": "yafyx",
+    "url": "https://github.com/yafyx/"
   },
   "tags": [
     "auth",

@@ -226,8 +226,8 @@ test("renderAccountPanel renders compact account usage groups", () => {
     assert.ok(usage);
     assert.equal(usage.children[0].textContent, "5h60%");
     assert.equal(usage.children[0].getAttribute("aria-label"), "5h 60%");
-    assert.equal(usage.children[1].textContent, "Weekly94%");
-    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 94%");
+    assert.equal(usage.children[1].textContent, "Weekly94%May 31");
+    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 94% May 31");
     assert.doesNotMatch(usage.textContent, /resets/);
   });
 });
@@ -283,7 +283,7 @@ test("renderAccountPanel matches native usage subitem structure for account rows
         accountUsage: {
           work: {
             fiveHour: { label: "5h", pct: 0, resetAt: "9:18 PM" },
-            weekly: { label: "Weekly", pct: 12, resetAt: "Jun 9" },
+            weekly: { label: "Weekly", pct: 12, resetAt: "Thu, 6:00 PM", resetAtMs: new Date(2026, 5, 11, 18).getTime() },
           },
         },
       },
@@ -309,8 +309,8 @@ test("renderAccountPanel matches native usage subitem structure for account rows
     assert.doesNotMatch(accountRow.style.cssText, /currentColor 5%/);
     assert.equal(usage.children[0].textContent, "5h0%resets 9:18 PM");
     assert.equal(usage.children[0].getAttribute("aria-label"), "5h 0% resets 9:18 PM");
-    assert.equal(usage.children[1].textContent, "Weekly12%");
-    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 12%");
+    assert.equal(usage.children[1].textContent, "Weekly12%Jun 11");
+    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 12% Jun 11");
     assert.equal(usage.children[0].children[0].textContent, "5h");
     assert.equal(usage.children[0].children[1].textContent, "0%");
     assert.equal(usage.children[0].children[2].textContent, "resets 9:18 PM");
@@ -561,7 +561,7 @@ test("renderAccountPanel keeps default cursors inside the accounts collapsible",
   });
 });
 
-test("renderAccountPanel shows reset text only for exhausted account usage", () => {
+test("renderAccountPanel shows compact weekly reset date after percentage", () => {
   withFakeDom(() => {
     const { renderAccountPanel } = require("../src/ui-popup");
     const panel = document.createElement("div");
@@ -585,9 +585,8 @@ test("renderAccountPanel shows reset text only for exhausted account usage", () 
     assert.ok(usage);
     assert.equal(usage.children[0].textContent, "5h0%resets 2:59 AM");
     assert.equal(usage.children[0].getAttribute("aria-label"), "5h 0% resets 2:59 AM");
-    assert.equal(usage.children[1].textContent, "Weekly84%");
-    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 84%");
-    assert.doesNotMatch(usage.children[1].textContent, /May 31/);
+    assert.equal(usage.children[1].textContent, "Weekly84%May 31");
+    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 84% May 31");
   });
 });
 
@@ -615,8 +614,8 @@ test("renderAccountPanel shows projected reset usage as full", () => {
     assert.ok(usage);
     assert.equal(usage.children[0].textContent, "5h100%reset");
     assert.equal(usage.children[0].getAttribute("aria-label"), "5h 100% reset");
-    assert.equal(usage.children[1].textContent, "Weekly84%");
-    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 84%");
+    assert.equal(usage.children[1].textContent, "Weekly84%May 31");
+    assert.equal(usage.children[1].getAttribute("aria-label"), "Weekly 84% May 31");
     assert.match(usage.title, /cached reset schedule/);
   });
 });

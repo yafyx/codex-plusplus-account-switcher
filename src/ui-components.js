@@ -374,6 +374,7 @@ function usageWindowPart(window, fallbackLabel) {
     exhausted,
     resetPassed,
   };
+  if (hasResetAtMs) part.resetAtMs = resetAtMs;
   if (window.projected === true) part.projected = true;
   return part;
 }

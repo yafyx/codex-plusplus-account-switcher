@@ -1568,6 +1568,7 @@ var require_ui_components = __commonJS({
         exhausted,
         resetPassed
       };
+      if (hasResetAtMs) part.resetAtMs = resetAtMs;
       if (window2.projected === true) part.projected = true;
       return part;
     }
@@ -1731,7 +1732,26 @@ var require_ui_account_row = __commonJS({
       if (part.exhausted && part.resetAt) {
         return { label: part.label, value, meta: `resets ${part.resetAt}` };
       }
+      if (part.label === "Weekly" && part.resetAt) {
+        return { label: part.label, value, meta: formatWeeklyResetDate(part) };
+      }
       return { label: part.label, value, meta: "" };
+    }
+    function formatWeeklyResetDate(part) {
+      const resetAtMs = Number(part.resetAtMs);
+      if (Number.isFinite(resetAtMs) && resetAtMs > 0) {
+        const date = new Date(resetAtMs);
+        if (Number.isFinite(date.getTime())) {
+          return date.toLocaleDateString(void 0, { month: "short", day: "numeric" });
+        }
+      }
+      return stripWeeklyResetTime(part.resetAt);
+    }
+    function stripWeeklyResetTime(resetAt) {
+      if (typeof resetAt !== "string") return "";
+      const dateMatch = /\b([A-Z][a-z]{2,8})\s+(\d{1,2})\b/.exec(resetAt);
+      if (dateMatch) return `${dateMatch[1]} ${dateMatch[2]}`;
+      return resetAt.replace(/^[A-Z][a-z]{2},\s*/i, "").replace(/\s+\d{1,2}:\d{2}\s*(?:AM|PM)?$/i, "").trim();
     }
     function accountDetailsPart(fragment, side) {
       const part = document.createElement("span");
